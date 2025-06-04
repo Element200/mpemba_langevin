@@ -423,7 +423,7 @@ class Ensemble(object):
         
         self.bins, self.heights = binned_active_range[1:]-self.dx/2, heights
 
-        return binned_active_range[:-1]-self.dx/2, heights # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
+        return binned_active_range[:-1]+self.dx/2, heights # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
 
     def get_distances(self, eqbm_boltzmann_distro=None, distance_function=L1):
         """
@@ -804,8 +804,8 @@ def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, colum
 if __name__ == '__main__':
     import os
     os.chdir("..")
-    temperatures = {'h': 1000, 'w': 12, 'c': 1}
-    potential = Asymmetric_DoubleWell_WithMaxSlope(2, 1.3, 50, x_min=-1, x_max=3)
-    data = run_mpemba_simulations(temperatures, 1000, potential)
-    ensemble = Ensemble(data, potential, expt_length=1e-1, temperatures=temperatures)
-    plt.plot(ensemble.ensemble.t, ensemble.get_distances().T)
+    # temperatures = {'h': 1000, 'w': 12, 'c': 1}
+    # potential = Asymmetric_DoubleWell_WithMaxSlope(2, 1.3, 50, x_min=-1, x_max=3)
+    # data = run_mpemba_simulations(temperatures, 1000, potential)
+    # ensemble = Ensemble(data, potential, expt_length=1e-1, temperatures=temperatures)
+    # plt.plot(ensemble.ensemble.t, ensemble.get_distances().T)
