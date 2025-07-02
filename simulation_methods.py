@@ -73,8 +73,7 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = la
 
     Parameters
     ----------
-    k_BTs : pandas array/dict of {temperature_label: temperature},
-        eg. {'h': 1000, 'w': 12, 'c': 1}.
+    k_BTs : Vector of numerics. At least one of these should be 1.
     num_particles : int
         Number of particles in the ensemble (preferably >1000).
     potential : Asymmetric_DoubleWell_WithMaxSlope object
@@ -95,15 +94,19 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = la
 
     """
     # potential_params ordering: [E_barrier, E_tilt, F_left, x_well, x_min,x_max,force_asymmetry]
-    if type(k_BTs) == dict:
-        k_BTs = pd.Series(k_BTs) # Convert for stability
-    active_range = np.linspace(x_min, x_max, num_allowed_initial_positions)
+    if not 1 in k_BTs:
+        raise ValueError("At least one reference temperature must exist!")
+    active_range = np.linspace(potential.x_min, potential.x_max, num_allowed_initial_positions)
     results = []
-    initial_distro = xr.DataArray([potential.boltzmann_array(active_range,k_BT) for k_BT in k_BTs], coords=(k_BTs.index, active_range), dims=(['T','p'])) 
+    initial_distro = xr.DataArray([potential.boltzmann_array(active_range,k_BT) for k_BT in k_BTs], coords=(k_BTs, active_range), dims=(['T','x']))
+    
     # (len(k_BTs) x num_allowed_initial_positions) array to draw positions from
 
     times = np.arange(0,expt_length,dt)
-    for k_BT_label in k_BTs.index:
-        x = np.random.choice(active_range, num_particles, p=initial_distro.loc[k_BT_label]) # draw initial position from its probability distribution
+    for k_BT in k_BTs:
+        p_arr=initial_distro.loc[k_BT]
+        if len(p_arr.shape)>1:
+            p_arr = p_arr[0,:] # If multiple redundant temperatures, pick the first of the identical probability distros
+        x = np.random.choice(active_range, num_particles, p=p_arr) # draw initial position from its probability distribution
         results.append(langevin_simulation(x, force=potential.F, temperature_function=quench_protocol, expt_length=expt_length))
-    return xr.DataArray(results, coords = [('T', k_BTs.index), ('n', np.arange(0,num_particles,1)),('t', times)])
+    return xr.DataArray(results, coords = [('T', k_BTs), ('n', np.arange(0,num_particles,1)),('t', times)])

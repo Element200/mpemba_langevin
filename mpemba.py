@@ -9,6 +9,9 @@ Contains high-level functions to perform analysis of Mpemba experiments
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+import scipy
+from tqdm import tqdm
+import sympy as sym
 
 # LOCAL IMPORTS
 import distance_functions
@@ -26,13 +29,14 @@ k_BT_b = 1
 gamma = k_BT_b/D #0.02
 
 def in_range(x, lower, upper):
+    """Find whether  lower <= x <= upper."""
     return (x <= upper) & (x >= lower) 
 
 @potential_methods.BoundedForcePotential
-class AsymmetricDoubleWellPotential(object):
+class AsymmetricDoubleWellPotential:
     """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Decorating with @BoundedForcePotential will add all other necessary methods."""
     
-    def __init__(self, E_barrier=2, E_tilt=1.3, x_well=0.5, x_min=-1, x_max=3, F_left=50, force_asymmetry=1):
+    def __init__(self, E_barrier=2, E_tilt=1.3, x_well=0.5, x_min=-1, x_max=2, F_left=50, force_asymmetry=1):
         """Define parameters used in the potential."""
         self.E_barrier = E_barrier
         self.E_tilt = E_tilt
@@ -61,14 +65,24 @@ class AsymmetricDoubleWellPotential(object):
 
         """
         return self.E_barrier*(1-2*(x/self.x_well)**2 + (x/self.x_well)**4) - self.E_tilt*(x/self.x_well)/2
-
+    
+    def __str__(self):
+        variables = self.__dict__
+        outstring = ""
+        for var in variables:
+            if not callable(variables[var]):
+                outstring += f"{var} : {variables[var]}\n"
+            else:
+                x = sym.symbols("x")
+                outstring += f"{var}({x}) : {variables[var](x)}"
+        return outstring
 
     
 
 class Ensemble(object):
     """Contains methods to do useful things with trajectory data obtained either experimentally or via simulations (the class is deliberately agnostic as to where the data comes from)."""
     
-    def __init__(self, data, potential, dt=1e-5, expt_length=6e-2, temperatures={'h':1000,'w':12,'c':1}):
+    def __init__(self, data, potential):
         """
         Initialise the object with relevant parameters.
 
@@ -92,14 +106,15 @@ class Ensemble(object):
         # potential: needs to be a vectorised function
         self.data = data
         self.potential = potential
-        self.temperatures = temperatures # This needs to be changed so that we get it from the data itself
+        self.temperatures = self.data['T'].to_numpy() # This needs to be changed so that we get it from the data itself
         self.num_temperatures = data.shape[0] # The first axis must be the number of temperatures
         self.N = data.shape[1] # The second axis must be the number of trials
-        self.dt = dt
+        self.dt = float(self.data.t[1]-self.data.t[0])
         self.expt_length = data.shape[-1]*dt # The last axis must be the timesteps
         self.times = data['t']
         self.bins, self.heights = None, None
         self.distances = None
+        self.p_values = None
         
         return None
 
@@ -146,6 +161,24 @@ class Ensemble(object):
         return binned_active_range[:-1]+self.dx/2, heights # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
     
     def get_CDFs(self, axis = 1, **kwargs):
+        """
+        Generate the cumulative density function at each point in time (by cumsumming the histogram).
+
+        Parameters
+        ----------
+        axis : TYPE, optional
+            DESCRIPTION. The default is 1.
+        **kwargs : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        bins : TYPE
+            DESCRIPTION.
+        CDFs : TYPE
+            DESCRIPTION.
+
+        """
         bins, heights = self.get_histograms(**kwargs)
         CDFs = self.dx*heights.cumsum(axis=axis)
         return bins, CDFs
@@ -160,7 +193,7 @@ class Ensemble(object):
             PMF (*not* PDF) of the Boltzmann distribution at the cold temperature. The size of
         the number of bins, otherwise taking the distance WILL fail. The default is the boltzmann array for the temperature corresponding to temperature 'c'. (If 'c' is not in the list of temperatures, this must be explicitly defined.)
         distance_function: function, optional
-            The distance function to use. This must take in two arguments and an optional argument called 'axis'. The default is L1.
+            The distance function to use. This must take in three arguments and an optional argument called 'axis'. The default is L1.
 
         Returns
         -------
@@ -170,20 +203,66 @@ class Ensemble(object):
         """
         bins, heights = self.get_histograms() # Generate the variables we need
         if eqbm_boltzmann_distro is None:
-            eqbm_boltzmann_distro = self.potential.boltzmann_array(bins, k_BT=self.temperatures['c'])
+            eqbm_boltzmann_distro = self.potential.boltzmann_array(bins, k_BT=1)/self.dx # Turn PMF into PDF
             eqbm_boltzmann_distro = np.repeat(np.reshape(eqbm_boltzmann_distro, (1,*eqbm_boltzmann_distro.shape)), self.num_temperatures, axis=0)
             eqbm_boltzmann_distro = np.reshape(eqbm_boltzmann_distro, (*eqbm_boltzmann_distro.shape, 1))
-        distances = distance_function(heights*self.dx, eqbm_boltzmann_distro, axis=1) # distance_function takes in probability *mass* functions, not densities, so we multiply by dx
+        distances = distance_function(heights, eqbm_boltzmann_distro, self.dx, axis=1)
         return distances
     
     def get_noise_floor(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, final_averaging_window=1000):
+        """
+        We define the average noise floor to be the time-averaged noise in the distance function over the last few timesteps.
+
+        Parameters
+        ----------
+        eqbm_boltzmann_distro : array, optional
+            Passed to get_distances(). The default is None.
+        distance_function : function, optional
+            Distance function passed to get_distances(). The default is distance_functions.L1.
+        final_averaging_window : int, optional
+            Number of timesteps to average over. The default is 1000.
+
+        Returns
+        -------
+        average_noise_floor : array of floats
+            Noise floor for each temperatures.
+        average_noise_amplitude : array of floats
+            Noise amplitude (standard deviation) for each temperature.
+
+        """
         distances = self.get_distances(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function)
         average_noise_floor = distances[...,-final_averaging_window:].mean(axis=1)
         average_noise_amplitude=distances[...,-final_averaging_window:].std(axis=1)
         
         return average_noise_floor, average_noise_amplitude
     
+    def time_to_noise_floor(self, eqbm_boltzmann_distro=None, distance_function = distance_functions.L1, threshold=0.02):
+        distances = self.get_distances(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function)
+        return np.array([self.data['t'][distances[i,:]<=threshold][0].to_numpy() for i in range(self.data.shape[0]-1)])
+        
+        
+    
     def signal_noise_ratio(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, final_averaging_window=1000):
+        """
+        We define the signal-noise ratio to be the ratio of the initial distance to equilibrium to the noise floor.
+
+        Parameters
+        ----------
+        eqbm_boltzmann_distro : array, optional
+            Passed to get_distances(). The default is None.
+        distance_function : function, optional
+            Distance function passed to get_distances(). The default is distance_functions.L1.
+        final_averaging_window : int, optional
+            Number of timesteps to average over. The default is 1000.
+
+        Returns
+        -------
+        average_noise_floor : array of floats
+            Noise floor for each temperatures.
+        average_noise_amplitude : array of floats
+            Noise amplitude (standard deviation) for each temperature.
+
+        """
         distances = self.get_distances(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function)
         average_noise_floor, average_noise_amplitude = self.get_noise_floor(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function,final_averaging_window=final_averaging_window)
         
@@ -202,7 +281,7 @@ class Ensemble(object):
         
     def get_average_energy(self, normalise_by_final=False, normalise_timesteps=100):
         """
-        Compute the ENSEMBLE average energy for each timestep, for each temperature.
+        Compute the ENSEMBLE average energy for each timestep, for each temperature. This is not a distance function.
 
         Parameters
         ----------
@@ -224,7 +303,25 @@ class Ensemble(object):
             return energy_av/final_energy_av # Return <E>/E_eq instead of just <E>
         return energy_av
     
-    def plot_sample_trajectories(self, num_trajectories = 4, temp='h'):
+    def p_vals(self):
+        if self.p_values is None: # Only generate this variable if it's not generated already
+            ref = np.repeat(self.data[-1,:,0].to_numpy()[np.newaxis, :], self.data.shape[0], axis=0)[...,np.newaxis]
+            self.p_values = scipy.stats.kstest(self.data, ref, axis=1).pvalue
+        return self.p_values
+    
+    def t_eq(self, *args, threshold=None, **kwargs):
+        p_values = self.p_vals()
+        if threshold is None:
+            threshold = p_values[-1,...].mean()-5*p_values[-1,...].std() # 'Noise amplitude' of cold p_values
+            print(threshold)
+        
+        
+        return np.array([self.data['t'][p_values[i,:]>=threshold][0].to_numpy() for i in range(self.data.shape[0]-1)]) # This list comprehension will run quickly because the number of temperatures is generally small. Exclude the last (cold) temperature because this will trivially be 0.
+        
+    
+        
+    
+    def plot_sample_trajectories(self, num_trajectories = 4, temp=None):
         """
         Plot a bunch of randomly selected trajectories.
 
@@ -240,6 +337,7 @@ class Ensemble(object):
         None.
 
         """
+        if temp is None: temp = self.data['T'][0]
         _ = self.get_histograms() # generate global_min and global_max
         plt.plot(range(int(self.expt_length//self.dt)+1), self.data.loc[temp, np.random.choice(self.N, num_trajectories),:].T)
         plt.plot([0,self.expt_length/self.dt],[[self.potential.x_min,self.potential.x_max], [self.potential.x_min, self.potential.x_max]], 'r')
@@ -277,7 +375,6 @@ class Ensemble(object):
         heights_mid = heights[...,mid]
         heights_end = heights[...,end]
         fig, ax = plt.subplots(self.num_temperatures)
-        keys = list(self.temperatures.keys())
         if self.num_temperatures == 1:
             ax = [ax] # Annoyingly, plt.subplots(1) does not yield a list of axes with one element.
         for i in range(self.num_temperatures):
@@ -287,15 +384,15 @@ class Ensemble(object):
             ax[i].bar(bins, heights_mid[i,:], color = 'orange', width = self.dx, label=f"t={mid}"*(i==0), alpha=0.3)
             ax[i].bar(bins, heights_end[i,:], color = 'green', width = self.dx, label=f"t={end}"*(i==0), alpha=0.3)
             if plot_init:
-                heights_init_pred = self.potential.boltzmann_array(bins, k_BT=self.temperatures[keys[i]])/self.dx
+                heights_init_pred = self.potential.boltzmann_array(bins, k_BT=self.temperatures[i])/self.dx
                 chi_squared = np.sum((heights_init[i,:] - heights_init_pred)**2 / heights_init_pred)
-                print(f"Initial histogram, T = {self.temperatures[keys[i]]}: chi^2 =", chi_squared)
+                print(f"Initial histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
                 ax[i].plot(bins, heights_init_pred, 'red', label=r"$\pi(x;T_0)$"*(i==0)) # fr-strings are both formatted strings and raw strings, apparently
             if plot_end:
                 heights_end_pred = self.potential.boltzmann_array(bins, k_BT=self.temperatures['c'])/self.dx # Final distro is always the cold one
                 ax[i].plot(bins, heights_end_pred, 'blue', label=r"$\pi(x;T_c)$"*(i==0))
                 chi_squared = np.sum((heights_end[i,:] - heights_end_pred)**2 / heights_end_pred)
-                print(f"Final histogram, T = {self.temperatures[keys[i]]}: chi^2 =", chi_squared)
+                print(f"Final histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
             ax[i].set_ylabel(r"$p(x,t)$")
         if i == self.num_temperatures-1:
             fig.legend()
@@ -305,40 +402,42 @@ class Ensemble(object):
         plt.show()
         return bins, [heights_init, heights_mid, heights_end]
     
-    def animate(self, T='h', num_bins=200, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100):
+    def animate(self, T=None, num_bins=30, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100, max_left=-1, max_right=3):
         """
-        
+        Animate p(x,t)
 
         Parameters
         ----------
-        T : TYPE, optional
-            DESCRIPTION. The default is 'h'.
-        num_bins : TYPE, optional
-            DESCRIPTION. The default is 200.
-        num_animated_frames : TYPE, optional
-            DESCRIPTION. The default is 500.
-        set_const_height : TYPE, optional
-            DESCRIPTION. The default is True.
-        use_log_time : TYPE, optional
-            DESCRIPTION. The default is True.
-        frame_decay_const : TYPE, optional
-            DESCRIPTION. The default is 100.
+        T : int, optional
+            The temperature to use. The default is the hot temperature.
+        num_bins : int, optional
+            Number of bins to use in the histogram. The default is 200.
+        num_animated_frames : int, optional
+            The number of frames to animate. Keep it small for efficient rendering. The default is 500.
+        set_const_height : bool, optional
+            Stop matplotlib from resizing the plot when the histogram gets taller or shorter. The default is True.
+        use_log_time : bool, optional
+            Use logarithmic time to animate the . The default is True.
+        frame_decay_const : int, optional
+            Controls how fast the exponential frame rate goes. The default is 100.
 
         Returns
         -------
-        TYPE
-            DESCRIPTION.
+        matplotlib animation
+            Animation of p(x,t).
 
         """
-        new_binned_active_range = np.linspace(self.potential.x_min, self.potential.x_max, num_bins)
-        new_binned_initial_distro = self.potential.boltzmann(new_binned_active_range, self.temperatures[T])
-        new_binned_final_distro = self.potential.boltzmann(new_binned_active_range, self.temperatures['c'])
+        if T is None: T = float(self.data['T'].max())
+        binned_active_range = np.linspace(self.potential.x_min, self.potential.x_max, num_bins)
+        fine_active_range = np.linspace(self.potential.x_min, self.potential.x_max, num_bins*10)
+        binned_initial_distro = self.potential.boltzmann(fine_active_range, T)
+        binned_final_distro = self.potential.boltzmann(fine_active_range, 1) # Cold temperature is always 1
         num_times = len(self.data.t)
         
         fig, ax = plt.subplots()
         bins, all_heights = self.get_histograms(num_bins=num_bins)
-        patches = ax.bar(bins, all_heights[0,:,0]/self.N, width=bins[1]-bins[0]) # FIX THIS: WE SET THE AXIS OF THE HISTOGRAMS TO PLOT TO ALWAYS BE 0,:,0
-        ax_height = np.max(new_binned_final_distro + 0.02)
+        patches = ax.bar(bins, all_heights[0,:,0]/self.N, width=bins[1]-bins[0])
+        ax_height = np.max(binned_final_distro + 0.02)
         ax.set_ylim(0,ax_height)
         
         exponential_frame_func = lambda x, x_0: (self.expt_length/self.dt)*(np.exp(x/x_0)-1)/(np.exp(num_animated_frames/x_0)-1) # Function to pick out a large number of frames in the beginning and a small number of frames in the end
@@ -348,11 +447,12 @@ class Ensemble(object):
             animated_frames = np.array(range(num_times)[::len(num_times)//num_animated_frames])
         # Time in the video will be on a log scale, primarily for rendering efficiency
         
-        ax.set_xlim((-1,3))
+        ax.set_xlim((max_left,max_right))
         ax.set_xlabel("x")
         ax.set_ylabel("p(x,t)")
-        ax.plot(new_binned_active_range, new_binned_initial_distro, 'r')
-        ax.plot(new_binned_active_range, new_binned_final_distro, 'g')
+        ax.plot(fine_active_range, binned_initial_distro, 'r')
+        ax.plot(fine_active_range, binned_final_distro, 'g')
+        ax.set_title(r"t = 0 $\mu$s")
         
         # Update function for the animation
         def update(frame_number):
@@ -361,7 +461,7 @@ class Ensemble(object):
             # Update the histogram data
             for i in range(len(patches)):
                 patches[i].set_height(heights[i])
-            ax.set_title(f"t = {frame_number*dt*1e3 : .0f} ms")
+            ax.set_title(fr"t = {10*frame_number} $\mu$s")
             if not set_const_height:
                 if frame_number % 50 == 0:
                     ax.set_ylim(0,ax_height) # Adjust the axis height every fifty frames
@@ -370,27 +470,33 @@ class Ensemble(object):
             return patches
         
         # Create the animation
-        ani = animation.FuncAnimation(fig, update, frames=animated_frames, interval=10, blit=True, cache_frame_data=True)
+        ani = animation.FuncAnimation(fig, update, frames=animated_frames, interval=10, blit=False, cache_frame_data=True)
         plt.show()
         return ani
 
-    def export_raw_data(self, filename):
+    def export_raw_data(self, filename, extension = ".csv"):
         """
-        **UNIMPLEMENTED** Convert the ensemble data into a netCDF file.
+        Convert the ensemble data into as many csv files as there are temperatures.
 
         Parameters
         ----------
         filename : str
-            The name of the file to export to.
+            The name of the file to export to. Each file name will have the temperature data on it
+        extension : str, optional
+            The filetype. Default is csv.
 
         Returns
         -------
         None.
 
         """
-        pass # TODO
+        for T in tqdm(self.temperatures):
+            df_T = self.data.loc[T].to_pandas().T # Transpose for cleanliness
+            filename_T = filename + "_T=" + str(T) + ".csv" # Construct the full filename
+            df_T.to_csv(filename_T)
+         # TODO
 
-def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x','t','V','state'], temperatures=['h','w','c'], gut_checks=True):
+def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x', 't', 'V', 'state', 'drift'], temperatures=[1000,12,1], gut_checks=True):
     """
     High-level functions to run all of the basic analysis defined here.
 
@@ -428,9 +534,35 @@ def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, colum
     if gut_checks:
         ensemble.gut_checks()
     distances = ensemble.get_distances()
-    energies = ensemble.get_energies()
-    times = ensemble.times
+    energies = ensemble.get_average_energy()
+    times = ensemble.data.t
+    fig2, ax2 = plt.subplots(2)
+    ax2[0].loglog(times, distances.T)
+    ax2[1].loglog(times, energies.T)
     return times, distances, energies
+
+
+def backwards_cumulative_max(data, axis=0):
+    """
+    Calculate the cumulative maximum of 'data', starting at the end and moving to the beginning. Eg, cummax([1,3,9,3,4,6,1,3,6,3,1,2]) = [9,9,9,6,6,6,6,6,6,3,2,2]
+
+    Parameters
+    ----------
+    data : vector of numerics
+        Data to find the cumulative max of
+    axis : int or None, optional
+        Axis to cummax over. The default is 0.
+
+    Returns
+    -------
+    cummaxed_data : vector of numerics (same shape as data)
+        Data with the cummax operation applied to it.
+
+    """
+    reverse = np.flip(data, axis=axis) # Use flip instead of slicing tricks so that we can specify the axis
+    cummaxed_reverse = np.maximum.accumulate(reverse, axis=axis)
+    cummaxed_data = np.flip(cummaxed_reverse, axis=axis) # After cummaxing the reversed data, flip it again so the ordering is correct
+    return cummaxed_data
 
 if __name__ == '__main__':
     import os

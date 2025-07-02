@@ -18,16 +18,18 @@ These are optimised to take in vectors of histograms and operate on the bins axi
 import numpy as np
 import scipy
 
-def L1(hist_1, hist_2, axis=None):
+def L1(hist_1, hist_2, dx, axis=None):
     """
     Find sum |hist_2-hist_1|_i. Does NOT calculate the integral; inputs must be converted to PMFs before function is called.
 
     Parameters
     ----------
     hist_1 : 2D vector of numerics
-        Some probability mass vector (this will not fail if hist_1 is not a probability mass but the intended use case is for PMFs).
+        Some probability density vector (this will not fail if hist_1 is not a probability mass but the intended use case is for PMFs).
     hist_2 : 2D vector of numerics of same shape as hist_1
-        Second probability mass vector.
+        Second probability density vector.
+    dx: float
+        Distance between bins
     axis : int, optional
         If hist_1 is multi-dimensional, the axis to sum along. The default is None.
 
@@ -39,11 +41,11 @@ def L1(hist_1, hist_2, axis=None):
     """
     # hist_1 and hist_2 must be at least two-dimensional arrays
     assert hist_1.shape[axis]==hist_2.shape[axis], f"Mismatch between hist_1 {np.array(hist_1).shape} and hist_2 {np.array(hist_2).shape}"
-    return np.sum(np.abs(hist_2-hist_1), axis=axis)
+    return np.sum(np.abs(hist_2-hist_1), axis=axis)*dx
 
 
 
-def kullback_leibler(hist_1, hist_2, axis=None):
+def kullback_leibler(hist_1, hist_2, dx, axis=None):
     """
     Take the entropic distance between hist_1 and hist_2. Not implemented to fullest potential yet.
 
@@ -53,6 +55,10 @@ def kullback_leibler(hist_1, hist_2, axis=None):
         Some probability mass vector (this will not fail if hist_1 is not a probability mass but the intended use case is for PMFs).
     hist_2 : 2D vector of numerics of same shape as hist_1
         Second probability mass vector.
+    dx: float
+        Distance between bins
+    axis : int, optional
+        If hist_1 is multi-dimensional, the axis to sum along. The default is None.
 
     Returns
     -------
@@ -68,28 +74,30 @@ def kullback_leibler(hist_1, hist_2, axis=None):
             return np.log(element) # Can't use branchless programming unfortunately because 0*inf = nan
     log_ish = np.vectorize(_helper)
     assert len(hist_1) == len(hist_2)
-    return np.sum(hist_1*log_ish(hist_1) - hist_1*log_ish(hist_2), axis=axis) # don't use hist_1/hist_2 in the log in case of zero bins
+    return np.sum(hist_1*log_ish(hist_1) - hist_1*log_ish(hist_2), axis=axis)*dx # don't use hist_1/hist_2 in the log in case of zero bins
 
-def kolmogorov_smirnoff(hist_1, hist_2, axis=None):
+def kolmogorov_smirnov(hist_1, hist_2, dx, axis=None):
     """
-    Calculate the Kolmogorov-Smirnoff statistic for histograms hist_1 and hist_2.
+    Calculate the Kolmogorov-Smirnov statistic for histograms hist_1 and hist_2.
 
     Parameters
     ----------
     hist_1 : vector of numerics
-        Probability mass vector.
+        Probability density vector.
     hist_2 : vector of numerics of same shape as hist_1
-        Another probability mass vector.
+        Another probability density vector.
+    dx: float
+        Distance between bins
     axis : int, optional
         axis to cumsum along. The default is None.
 
     Returns
     -------
     vector of numerics
-        Kolmogorov-Smirnoff statistic between both histograms.
+        Kolmogorov-Smirnov statistic between both histograms.
 
     """
-    CDF1, CDF2 = np.cumsum(hist_1, axis=axis), np.cumsum(hist_2, axis=axis) # Compute the CDFs (hist_1 and hist_2 are PMFs, so no need to multiply by dx)
+    CDF1, CDF2 = np.cumsum(hist_1*dx, axis=axis), np.cumsum(hist_2*dx, axis=axis) # Compute the CDFs
     return np.max(np.abs(CDF2-CDF1), axis=axis)
 
 def KS_empirical(data, CDF, x):
