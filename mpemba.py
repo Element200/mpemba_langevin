@@ -1,7 +1,7 @@
 """
 mpemba.py.
 
-v1
+v1.1
 @author: sane
 Contains high-level functions to perform analysis of Mpemba experiments
 """
