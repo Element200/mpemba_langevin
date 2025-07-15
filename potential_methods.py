@@ -13,6 +13,7 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 import sympy as sym
+import pandas as pd
 
 def TimeDependentPotential(cls):
     class TimeDependentPotential_Methods(cls):
@@ -287,9 +288,8 @@ def Potential(cls):
             Z = scipy.integrate.quad_vec(lambda x: self._boltzmann_unnormalised(x, k_BT), *integration_bounds)[0]
             func = np.vectorize(lambda x, k_BT: self._boltzmann_unnormalised(x, k_BT)/Z) # Normalise the PDF
             return func(x, k_BT)
-        def boltzmann_array(self, x, k_BT, **kwargs):
+        def boltzmann_PMF(self, x, k_BT, **kwargs):
             """
-            PMF
             Normalise the PDF again over the sum of the values of x because of an annoying issue in np.random.choice where the probability vector has to sum to exactly 1 with no tolerance for floating point error.
 
             Parameters
@@ -328,8 +328,8 @@ def Potential(cls):
                 CDF evaluated at x.
 
             """
-            PDF = self.boltzmann_array(x, k_BT, **kwargs)
-            CDF = np.cumsum(PDF)
+            PDF = self.boltzmann_PMF(x, k_BT, **kwargs)/self.dx
+            CDF = np.cumsum(PDF)*self.dx
             return CDF
         
     return Potential_Methods
@@ -337,7 +337,7 @@ def Potential(cls):
 
 def BoundedForcePotential(child_cls):
     """
-    Decorator function to convert a class defining a potential into a potential of the same force with a force that lives between F_max and F_min. Takes in a class defining the functional form of the potential and returns a grandchild class with more attributes
+    Convert a class defining a potential into a potential of the same force with a force that lives between F_max and F_min. Takes in a class defining the functional form of the potential and returns a grandchild class with more attributes.
 
     Returns
     -------
@@ -373,6 +373,9 @@ def BoundedForcePotential(child_cls):
         
         def __str__(self):
             return child_cls.__str__(self)
+        
+        def __repr__(self):
+            return child_cls.__repr__(self)
          
         def U(self, x):
             """
@@ -519,8 +522,13 @@ def BoundedForcePotential(child_cls):
                 CDF evaluated at x.
 
             """
-            PDF = self.boltzmann_array(x, k_BT, **kwargs)
+            PDF = self.boltzmann(x, k_BT, **kwargs)
             CDF = np.cumsum(PDF)
             return CDF
+        def export_CDF(self, filename, k_BT, num_points, **kwargs):
+            arr = np.linspace(self.x_min, self.x_max, num_points)
+            CDF = self.boltzmann_CDF(arr, k_BT, **kwargs)
+            pd.DataFrame(CDF, columns=['','']).to_csv(filename+f"_{k_BT}.csv")
+            return None
         
     return BoundedForcePotential_Methods

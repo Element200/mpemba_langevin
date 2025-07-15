@@ -12,25 +12,69 @@ import matplotlib.animation as animation
 import scipy
 from tqdm import tqdm
 import sympy as sym
+import pandas as pd
+import os
+import numba
 
-# LOCAL IMPORTS
-import distance_functions
-import potential_methods
-import simulation_methods
-import file_processing
+directory = os.path.dirname(__file__)
+
+import sys
+sys.path.append(directory)
+# LOCAL IMPORTS: replace the above with your path to avoid bugs!
+# This assumes that all of the mpemba files are in the same directory
+try:
+    import distance_functions
+    import potential_methods
+    import simulation_methods
+    import file_processing
+except ImportError:
+    print("Something went wrong when importing dependencies!")
 
 dt = 1e-5
 expt_length = 6e-2
 F = lambda x: -x
 x_min = -1
 x_max = 3
-D = 170 # px^2/s
 k_BT_b = 1
-gamma = k_BT_b/D #0.02
+
+def __init__():
+    return None
 
 def in_range(x, lower, upper):
     """Find whether  lower <= x <= upper."""
     return (x <= upper) & (x >= lower) 
+
+@numba.jit
+def fast_histogram(arr, num_bins, bin_range):
+    """
+    Take a 1D histogram over 3D data. Uses numba for major speed increases.
+
+    Parameters
+    ----------
+    arr : 3D vector of numerics; coords: (T, n, t)
+        position data in the standard format.
+    num_bins : int
+        Number of bins (to get numpy histogram-like results, always set this to be the desired number of bins minus one).
+    bin_range : array of length 2
+        .
+
+    Returns
+    -------
+    hist : 3D vector of numerics
+        DESCRIPTION.
+
+    """
+    n_temps, n_rows, n_timesteps = arr.shape
+    hist = np.zeros((n_temps, num_bins, n_timesteps), dtype=np.float64)
+    bin_width = (bin_range[1] - bin_range[0]) / num_bins
+    for j in numba.prange(n_temps):
+        for i in numba.prange(n_timesteps):
+            for val in arr[j,:,i]:
+                bin_idx = np.int32((val - bin_range[0]) // bin_width) # This will produce weird results if any element is outside bin_range.
+                hist[j, bin_idx, i] += 1/(n_rows*bin_width) # For PDF
+    return hist
+
+
 
 @potential_methods.BoundedForcePotential
 class AsymmetricDoubleWellPotential:
@@ -67,6 +111,15 @@ class AsymmetricDoubleWellPotential:
         return self.E_barrier*(1-2*(x/self.x_well)**2 + (x/self.x_well)**4) - self.E_tilt*(x/self.x_well)/2
     
     def __str__(self):
+        """
+        Print all the variables we use in the potential.
+
+        Returns
+        -------
+        outstring : str
+            String representation of AsymmetricDoubleWellPotential.
+
+        """
         variables = self.__dict__
         outstring = ""
         for var in variables:
@@ -74,9 +127,20 @@ class AsymmetricDoubleWellPotential:
                 outstring += f"{var} : {variables[var]}\n"
             else:
                 x = sym.symbols("x")
-                outstring += f"{var}({x}) : {variables[var](x)}"
+                outstring += f"{var}({x}) : {variables[var](x)}\n"
         return outstring
+    
+    def __repr__(self):
+        """
+        Do the same schtick as __str__ but now we don't have to make a print call.
 
+        Returns
+        -------
+        outstring : str
+            String representation of AsymmetricDoubleWellPotential.
+
+        """
+        return self.__str__()
     
 
 class Ensemble(object):
@@ -118,7 +182,7 @@ class Ensemble(object):
         
         return None
 
-    def get_histograms(self, x_max=None, x_min=None, num_bins=100):
+    def get_histograms(self, x_max=None, x_min=None, num_bins=100, regenerate=False):
         """
         Histogram over ensemble number. If self.bins and self.heights are already generated, return them; this will only do work if self.bins and self.heights are None and None.
 
@@ -130,6 +194,8 @@ class Ensemble(object):
             Left end of the box. If None, x_min will be pulled from the potential definition. The default is None.
         bins : preferably int, but arrays also work; optional
             Number of bins in each histogram. The default is 100.
+        regenerate : bool, optional
+            Recalculate the number of bins. If set to False and histograms are already generated, it will pull cached bins+histogram
 
         Returns
         -------
@@ -145,7 +211,7 @@ class Ensemble(object):
             x_max = self.potential.x_max
         
         # returns an array of histograms 
-        if not (self.heights is None and self.bins is None):
+        if (not (self.heights is None and self.bins is None)) and (not regenerate):
             return self.bins, self.heights # Don't do all this work if you've already done it before
         
         # binned_active_domain = np.linspace(x_min, x_max, bins) # In principle you should use binned_active_domains for computations but it's possible that the particles leave the box, in which case histogramming should be done over the full range of possible positions to avoid bugs.
@@ -154,8 +220,9 @@ class Ensemble(object):
         binned_active_range = np.linspace(self.global_min, self.global_max, num_bins)
         self.dx = binned_active_range[1]-binned_active_range[0]
 
-        heights = np.apply_along_axis(lambda data: np.histogram(data, bins=binned_active_range, density=True)[0], axis=1, arr=self.data)
-        
+        # heights = np.apply_along_axis(lambda data: np.histogram(data, bins=binned_active_range, density=True)[0], axis=1, arr=self.data)
+        heights = fast_histogram(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max]))
+        # heights = np.swapaxes(heights, 1, 2)
         self.bins, self.heights = binned_active_range[1:]-self.dx/2, heights
 
         return binned_active_range[:-1]+self.dx/2, heights # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
@@ -183,7 +250,7 @@ class Ensemble(object):
         CDFs = self.dx*heights.cumsum(axis=axis)
         return bins, CDFs
 
-    def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1):
+    def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3)):
         """
         Get the distance of the ensemble to equilibrium, defined by eqbm_boltzmann_distro.
 
@@ -194,6 +261,10 @@ class Ensemble(object):
         the number of bins, otherwise taking the distance WILL fail. The default is the boltzmann array for the temperature corresponding to temperature 'c'. (If 'c' is not in the list of temperatures, this must be explicitly defined.)
         distance_function: function, optional
             The distance function to use. This must take in three arguments and an optional argument called 'axis'. The default is L1.
+        use_smoothing : bool, optional
+            Smooth the distances using a convolution. The default is False.
+        kernel : vector of numerics, optional
+            Convolution kernel to use if smoothing is enabled. The default is [1,1,1] for numerical averaging.
 
         Returns
         -------
@@ -201,12 +272,21 @@ class Ensemble(object):
             Distances at each timestep, for each temperature.
 
         """
-        bins, heights = self.get_histograms() # Generate the variables we need
+        bins, heights = self.get_histograms(num_bins=num_bins, regenerate=regenerate) # Generate the variables we need
         if eqbm_boltzmann_distro is None:
             eqbm_boltzmann_distro = self.potential.boltzmann_array(bins, k_BT=1)/self.dx # Turn PMF into PDF
             eqbm_boltzmann_distro = np.repeat(np.reshape(eqbm_boltzmann_distro, (1,*eqbm_boltzmann_distro.shape)), self.num_temperatures, axis=0)
             eqbm_boltzmann_distro = np.reshape(eqbm_boltzmann_distro, (*eqbm_boltzmann_distro.shape, 1))
         distances = distance_function(heights, eqbm_boltzmann_distro, self.dx, axis=1)
+        if use_smoothing:
+            kernel = np.array(kernel/np.sum(kernel)) # Normalise the kernel
+            kernel_radius = kernel.shape[0]//2
+            convolved_distances = np.apply_along_axis(lambda arr: np.convolve(arr, kernel, mode='same'), axis=1, arr=distances) # Convolve the kernel with distances along only the time axis. 'same' mode gives us boundary weirdness that we must still deal with
+            convolved_distances[:,:kernel_radius] = distances[:,:kernel_radius]
+            convolved_distances[:,-kernel_radius:] = distances[:,-kernel_radius:]
+            # Replace boundary weirdness with original values.
+            return convolved_distances
+        
         return distances
     
     def get_noise_floor(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, final_averaging_window=1000):
@@ -235,11 +315,6 @@ class Ensemble(object):
         average_noise_amplitude=distances[...,-final_averaging_window:].std(axis=1)
         
         return average_noise_floor, average_noise_amplitude
-    
-    def time_to_noise_floor(self, eqbm_boltzmann_distro=None, distance_function = distance_functions.L1, threshold=0.02):
-        distances = self.get_distances(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function)
-        return np.array([self.data['t'][distances[i,:]<=threshold][0].to_numpy() for i in range(self.data.shape[0]-1)])
-        
         
     
     def signal_noise_ratio(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, final_averaging_window=1000):
@@ -304,12 +379,107 @@ class Ensemble(object):
         return energy_av
     
     def p_vals(self):
+        """
+        Calculate the p values from the KS statistic.
+
+        Returns
+        -------
+        vector of numerics
+            p values from KS statistic.
+
+        """
         if self.p_values is None: # Only generate this variable if it's not generated already
             ref = np.repeat(self.data[-1,:,0].to_numpy()[np.newaxis, :], self.data.shape[0], axis=0)[...,np.newaxis]
             self.p_values = scipy.stats.kstest(self.data, ref, axis=1).pvalue
         return self.p_values
     
-    def t_eq(self, *args, threshold=None, **kwargs):
+    def t_eq(self, threshold=None, **kwargs_for_distances):
+        """
+        Calculate the equilibration time by finding the first passage time for when the system "reaches" the noise.
+
+        Parameters
+        ----------
+        threshold : numeric, optional
+            Noise threshold. If set to None, this will be automatically reset to mean+5*std. The default is None.
+
+        Returns
+        -------
+        t_vals : vector of numerics
+            equilibration times.
+
+        """
+        distances = self.get_distances(**kwargs_for_distances)
+        if threshold is None:
+            threshold = distances[-1].mean()+5*distances[-1].std()
+        t_vals = np.array([self.data['t'][distances[i,:]<=threshold][0].to_numpy() for i in range(self.data.shape[0]-1)])
+        return t_vals
+    
+    def get_subensembles(self, num_splits = 10):
+        """
+        Partition the ensemble into multiple sub-ensembles by randomly selecting particles.
+
+        Parameters
+        ----------
+        num_splits : int, optional
+            Number of ways to split the dataset. The default is 10.
+
+        Returns
+        -------
+        list of Ensemble objects
+            subensembles, randomly shuffled from the original data.
+        """
+        particle_selections = np.arange(self.N)
+        np.random.shuffle(particle_selections) # Shuffle inplace
+        index_lists = np.array_split(particle_selections, num_splits)
+        subensembles = []
+        for i in range(len(index_lists)):
+            subensembles.append(Ensemble(self.data.loc[:,index_lists[i],:], self.potential)) # Use index_lists to choose trajectories for each subensemble
+        return subensembles
+    
+    def sub_t_eq(self, num_splits=10, threshold=None, n_val = None):
+        """
+        Get a series of values of t_eq by dividing the ensembles into subensembles and calculating the t_eq for each subensemble.
+
+        Parameters
+        ----------
+        num_splits : int, optional
+            Number of subensembles to create. The default is 10.
+        threshold : numeric, optional
+            Noise threshold. The default is None.
+        n_val : numeric, optional
+            n from Bechhoefer and Sane. The default is None.
+
+        Returns
+        -------
+        Vector of numerics
+            t_eqs for each subensemble, for each temperature.
+
+        """
+        if n_val is None: n_val=1.5 # for now
+        subensembles = self.get_subensembles(num_splits=num_splits)
+        t_eq_vals = []
+        set_threshold_automatically = (threshold is None) # threshold is mutated in the loop so this needs to be declared beforehand
+        for subensemble in subensembles:
+            if set_threshold_automatically:
+                dist = subensemble.get_distances()[-1]
+                threshold = np.median(dist)+n_val*(np.max(dist)-np.median(dist))
+            t_eq_vals.append(subensemble.t_eq(threshold=threshold))
+        return np.array(t_eq_vals)
+    def t_eq_from_p_vals(self, *args, threshold=None):
+        """
+        Calculate t_eq using the place where the p_val reaches the noise.
+
+        Parameters
+        ----------
+        threshold : numeric, optional
+            Noise threshold. The default is None.
+
+        Returns
+        -------
+        vector of numerics
+            t_eq vals for each temperature.
+
+        """
         p_values = self.p_vals()
         if threshold is None:
             threshold = p_values[-1,...].mean()-5*p_values[-1,...].std() # 'Noise amplitude' of cold p_values
@@ -319,7 +489,24 @@ class Ensemble(object):
         return np.array([self.data['t'][p_values[i,:]>=threshold][0].to_numpy() for i in range(self.data.shape[0]-1)]) # This list comprehension will run quickly because the number of temperatures is generally small. Exclude the last (cold) temperature because this will trivially be 0.
         
     
-        
+    def plot_distances(self, colors=['r','b','k'], **kwargs_for_distances):
+        """
+        Plot distances.
+
+        Parameters
+        ----------
+        distance_function : function, optional
+            Distance function to use. The default is distance_functions.L1.
+
+        Returns
+        -------
+        None.
+
+        """
+        distances = self.get_distances(**kwargs_for_distances)
+        for i in range(self.num_temperatures):
+            plt.loglog(self.data.t, distances[self.num_temperatures-i-1], color=colors[self.num_temperatures-i-1])
+        return None
     
     def plot_sample_trajectories(self, num_trajectories = 4, temp=None):
         """
@@ -404,7 +591,7 @@ class Ensemble(object):
     
     def animate(self, T=None, num_bins=30, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100, max_left=-1, max_right=3):
         """
-        Animate p(x,t)
+        Animate p(x,t).
 
         Parameters
         ----------
@@ -428,7 +615,6 @@ class Ensemble(object):
 
         """
         if T is None: T = float(self.data['T'].max())
-        binned_active_range = np.linspace(self.potential.x_min, self.potential.x_max, num_bins)
         fine_active_range = np.linspace(self.potential.x_min, self.potential.x_max, num_bins*10)
         binned_initial_distro = self.potential.boltzmann(fine_active_range, T)
         binned_final_distro = self.potential.boltzmann(fine_active_range, 1) # Cold temperature is always 1
@@ -494,7 +680,26 @@ class Ensemble(object):
             df_T = self.data.loc[T].to_pandas().T # Transpose for cleanliness
             filename_T = filename + "_T=" + str(T) + ".csv" # Construct the full filename
             df_T.to_csv(filename_T)
-         # TODO
+        return None
+    def export_distances(self, filename, distance_function=distance_functions.L1, eqbm_boltzmann_distro=None):
+        """
+        Convert the distances into a single csv file.
+
+        Parameters
+        ----------
+        filename : str
+            The name of the file to export to. Each file name will have the temperature data on it
+
+        Returns
+        -------
+        None.
+
+        """
+        distances = self.get_distances(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function)
+        distances_df = pd.DataFrame(distances.T, columns=self.temperatures)
+        distances_df.index = self.data.t
+        distances_df.to_csv(filename)
+        return None
 
 def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x', 't', 'V', 'state', 'drift'], temperatures=[1000,12,1], gut_checks=True):
     """
@@ -544,7 +749,7 @@ def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, colum
 
 def backwards_cumulative_max(data, axis=0):
     """
-    Calculate the cumulative maximum of 'data', starting at the end and moving to the beginning. Eg, cummax([1,3,9,3,4,6,1,3,6,3,1,2]) = [9,9,9,6,6,6,6,6,6,3,2,2]
+    Calculate the cumulative maximum of 'data', starting at the end and moving to the beginning. Eg, cummax([1,3,9,3,4,6,1,3,6,3,1,2]) = [9,9,9,6,6,6,6,6,6,3,2,2].
 
     Parameters
     ----------

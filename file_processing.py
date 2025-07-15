@@ -11,6 +11,7 @@ Contains methods to convert file data into an object that the Ensemble class in 
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 import xarray as xr
 
 def chunk_splitter(dataframe, dt=1e-5):
@@ -63,14 +64,39 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
         Array with appropriate dimensions in with the same structure as after the simulation, so that further analysis on either data is identical.
 
     """
-    data = []
     chunks = {}
     n_min = np.inf # Minimum number of particles in an array. Initially set to infinity because that's much higher than any experiment will realistically produce
     for filename in filenames:
         chunks[filename] = chunk_splitter(pd.read_table(filename, names=column_names, usecols=['x','t','state']))
         if chunks[filename].shape[0] < n_min:
             n_min = int(chunks[filename].shape[0]) # Once this for loop is done running, n_min will hold the lowest number of particles in the dataarray
-    for filename in filenames:
-        data.append(chunks[filename].loc[:n_min, ...]) # This ensures that data will contain fixed-length data along the n dimension as well
+    data = np.zeros((len(filenames), n_min, int(protocol_time//dt)))
+    for i in range(len(filenames)):
+        filename = filenames[i]
+        data[i,...] = chunks[filename].loc[:n_min, ...] # This ensures that data will contain fixed-length data along the n dimension as well
     array = xr.DataArray(data, dims=['T','n','t'], coords={'T':temperatures, 't': np.arange(0,protocol_time,dt)})
     return array
+
+def load_processed_data(filenames, temperatures=[1000,12,1]):
+    """
+    Load trajectory data that has already been processed to remove the junk. Can also load processed simulation data. Do not use this to import raw data. All of the time columns must be the same and the file format must be a csv with the first row corresponding to the ensemble index and the first column corresponding to the time.
+
+    Parameters
+    ----------
+    filenames : list of str
+        Names of processed files.
+    temperatures : list of numerics
+        Temperatures corresponding to each file (in the same order).
+
+    Returns
+    -------
+    xr.DataArray
+        Processed data as an xarray
+
+    """
+    assert len(filenames) == len(temperatures), "Mismatch between number of files and number of temperatures!"
+    data = []
+    for i in tqdm(range(len(filenames))):
+        data.append(pd.read_csv(filenames[i], header = 0, index_col=0).T)
+    t = data[-1].columns # Assumes the time columns are all the same
+    return xr.DataArray(data, dims=('T', 'n', 't'), coords = {'T': temperatures, 't':t})
