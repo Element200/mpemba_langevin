@@ -98,7 +98,7 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = la
         raise ValueError("At least one reference temperature must exist!")
     active_range = np.linspace(potential.x_min, potential.x_max, num_allowed_initial_positions)
     results = []
-    initial_distro = xr.DataArray([potential.boltzmann_array(active_range,k_BT) for k_BT in k_BTs], coords=(k_BTs, active_range), dims=(['T','x']))
+    initial_distro = xr.DataArray([potential.boltzmann_PMF(active_range,k_BT) for k_BT in k_BTs], coords=(k_BTs, active_range), dims=(['T','x']))
     
     # (len(k_BTs) x num_allowed_initial_positions) array to draw positions from
 

@@ -3,7 +3,7 @@
 file_processing.py.
 
 Created on Wed Jun 11 14:46:01 2025
-v1
+v1.2
 
 @author: sane
 Contains methods to convert file data into an object that the Ensemble class in mpemba.py can operate on.
@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import xarray as xr
+import scipy
 
 def chunk_splitter(dataframe, dt=1e-5, state_to_extract='protocol', state_phase_lag=0, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}):
     """
@@ -83,16 +84,50 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
         n = int(chunks[filename]['n'][-1]) # Nymber of particles in chunks['filename']
         if n < n_min:
             n_min = int(chunks[filename]['n'][-1]) # Once this for loop is done running, n_min will hold the lowest number of particles in the dataarray
-    # data_array = {var: xr.zeros.zeros((len(filenames), n_min, int(protocol_time//dt))) for var in chunks[filenames[0]].data_vars}
-    # for i in range(len(filenames)):
-    #     filename = filenames[i]
-    #     for var in chunks[filename].data_vars:
-    #         data_array[var][i,...] = chunks[filename][var].loc[:n_min, ...] # This ensures that data will contain fixed-length data along the n dimension as well
     array = []
     for var in chunks[filenames[0]].data_vars:
         array.append(xr.concat([chunks[filename][var].loc[:n_min,...].assign_coords(t=np.arange(0,protocol_time,dt)) for filename in filenames], pd.Index(temperatures, name='T')))
     # array = xr.DataArray(data, dims=['T','n','t'], coords={'T':temperatures, 't': np.arange(0,protocol_time,dt)})
     return array
+
+def load_brownian_data(filenames, column_names=['x','t','drift','state','x0'], cols_to_extract=['x']):
+    tables = []
+    length = np.inf
+    for i in range(len(filenames)):
+        table = pd.read_table(filenames[i], names = column_names, usecols=cols_to_extract).rename(columns={'x':f'x{i}'})
+        trial_length = table[~np.isnan(table.loc[:,f'x{i}'])].shape[0]
+        if trial_length < length: 
+            length = trial_length
+        tables.append(table)
+    data = pd.concat(tables, axis=1)
+    return data.iloc[:length, :] # To avoid nan values if importing unevenly sized data
+
+def fit_aliased_lorentzian(f, P, dt=1e-5, noverlap=50):
+    def _aliased_lorentzian(f, c, dx, dt=dt):
+        return (dt*dx**2)/(1+c**2-2*c*np.cos(2*np.pi*f*dt))
+    popt, pcov = scipy.optimize.curve_fit(_aliased_lorentzian, xdata=f, ydata=P, p0=[1,0.05])
+    c, dx = popt
+    f_nyq = 1/dt/2 #f_s/2
+    f_c = -f_nyq*np.log(c)/np.pi
+    D = (dx**2)/(1-c**2)*2*np.pi*f_c
+    return f_c, D*noverlap/(noverlap-2) # Correct for systematic errors due to LSQ fits -- see Norrelykke and Flyvbjerg (2003)
+
+def aliased_lorentzian(f, f_c, D, dt=1e-5):
+    f_nyq = 1/dt/2
+    c = np.exp(-np.pi*f_c/f_nyq)
+    dx = np.sqrt((1-c**2)*D/(2*np.pi*f_c))
+    return (dt*dx**2)/(1+c**2-2*c*np.cos(2*np.pi*f*dt))
+
+def boltzmann_fit(x, num_bins=20):
+    heights, bins = np.histogram(x, bins=num_bins, density=True)
+    dx = bins[1]-bins[0]
+    x_range = bins[:-1]+dx/2 # Centre the bins
+    popt, pcov = scipy.optimize.curve_fit(lambda x, k: np.sqrt(k/(2*np.pi))*np.exp(-0.5*k*x**2), xdata=x_range, ydata=heights)
+    return popt
+
+def equipartition(x):
+    sigma_x = np.std(x)
+    return 1/sigma_x**2 # Assumes no measurement noise
 
 def load_processed_data(filenames, temperatures=[1000,12,1]):
     """
@@ -117,7 +152,3 @@ def load_processed_data(filenames, temperatures=[1000,12,1]):
         data.append(pd.read_csv(filenames[i], header = 0, index_col=0).T)
     t = data[-1].columns # Assumes the time columns are all the same
     return xr.DataArray(data, dims=('T', 'n', 't'), coords = {'T': temperatures, 't':t})
-
-if __name__ == '__main__':
-    filenames = [f"../Data/2025_06_30/data_{key}.txt" for key in ['h','w','c']]
-    data = extract_file_data(filenames, 7e-2, cols_to_extract=['x','drift'])

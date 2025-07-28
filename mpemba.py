@@ -1,7 +1,7 @@
 """
 mpemba.py.
 
-v1.1
+v1.2
 @author: sane
 Contains high-level functions to perform analysis of Mpemba experiments
 """
@@ -20,7 +20,6 @@ directory = os.path.dirname(__file__)
 
 import sys
 sys.path.append(directory)
-# LOCAL IMPORTS: replace the above with your path to avoid bugs!
 # This assumes that all of the mpemba files are in the same directory
 try:
     import distance_functions
@@ -28,7 +27,7 @@ try:
     import simulation_methods
     import file_processing
 except ImportError:
-    print("Something went wrong when importing dependencies!")
+    print("Something went wrong when importing dependencies! Make sure local imports are in the same directory as this file")
 
 dt = 1e-5
 expt_length = 6e-2
@@ -44,7 +43,7 @@ def in_range(x, lower, upper):
     """Find whether  lower <= x <= upper."""
     return (x <= upper) & (x >= lower) 
 
-@numba.jit
+@numba.njit(parallel=True)
 def fast_histogram(arr, num_bins, bin_range):
     """
     Take a 1D histogram over 3D data. Uses numba for major speed increases.
@@ -76,8 +75,7 @@ def fast_histogram(arr, num_bins, bin_range):
 
 
 
-@potential_methods.BoundedForcePotential
-class AsymmetricDoubleWellPotential:
+class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
     """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Decorating with @BoundedForcePotential will add all other necessary methods."""
     
     def __init__(self, E_barrier=2, E_tilt=1.3, x_well=0.5, x_min=-1, x_max=2, F_left=50, force_asymmetry=1):
@@ -89,9 +87,10 @@ class AsymmetricDoubleWellPotential:
         self.x_max = x_max
         self.F_left = F_left
         self.F_right = force_asymmetry*F_left
+        super().__init__(self) # Initialise the parent class *after* useful variable are defined so that it knows what variables to use
         return None
     
-    def U_0(self, x):
+    def U_0(self, x, t=None):
         """
         Generate basic potential (without bounded derivatives) evaluated at x.
 
@@ -121,7 +120,7 @@ class AsymmetricDoubleWellPotential:
 
         """
         variables = self.__dict__
-        outstring = ""
+        outstring = "ASYMMETRIC DOUBLE-WELLED QUARTIC POTENTIAL WITH FINITE MAXIMUM SLOPES\n"
         for var in variables:
             if not callable(variables[var]):
                 outstring += f"{var} : {variables[var]}\n"
@@ -221,8 +220,7 @@ class Ensemble(object):
         self.dx = binned_active_range[1]-binned_active_range[0]
 
         # heights = np.apply_along_axis(lambda data: np.histogram(data, bins=binned_active_range, density=True)[0], axis=1, arr=self.data)
-        heights = fast_histogram(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max]))
-        # heights = np.swapaxes(heights, 1, 2)
+        heights = fast_histogram(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max])) # Using numba-optimised code speeds things up by 2-3x
         self.bins, self.heights = binned_active_range[1:]-self.dx/2, heights
 
         return binned_active_range[:-1]+self.dx/2, heights # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
@@ -274,7 +272,7 @@ class Ensemble(object):
         """
         bins, heights = self.get_histograms(num_bins=num_bins, regenerate=regenerate) # Generate the variables we need
         if eqbm_boltzmann_distro is None:
-            eqbm_boltzmann_distro = self.potential.boltzmann_array(bins, k_BT=1)/self.dx # Turn PMF into PDF
+            eqbm_boltzmann_distro = self.potential.boltzmann_PMF(bins, k_BT=1)/self.dx # Turn PMF into PDF
             eqbm_boltzmann_distro = np.repeat(np.reshape(eqbm_boltzmann_distro, (1,*eqbm_boltzmann_distro.shape)), self.num_temperatures, axis=0)
             eqbm_boltzmann_distro = np.reshape(eqbm_boltzmann_distro, (*eqbm_boltzmann_distro.shape, 1))
         distances = distance_function(heights, eqbm_boltzmann_distro, self.dx, axis=1)
@@ -343,9 +341,27 @@ class Ensemble(object):
         
         return distances[...,0]/average_noise_floor # SNR := d[p(x,0),π(x;T)]/d[p(x,t>t_eq),π(x;T)]
     
-    def find_crossings(self, epsilon=0.01, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, final_averaging_window=1000):
-        distances = self.get_distances(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function)
-        average_noise_floor, average_noise_amplitude = self.get_noise_floor(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function, final_averaging_window=final_averaging_window)
+    def find_crossings(self, epsilon=0.01, final_averaging_window=1000, **kwargs_for_distances):
+        """
+        Find times where d[p_h(x,t),pi_c]=d[p_w(x,t),pi_c].
+
+        Parameters
+        ----------
+        epsilon : numeric, optional
+            Error tolerance (distances must be within epsilon of each other). The default is 0.01.
+        final_averaging_window : int, optional
+            Averaging window for get_noise_floor. The default is 1000.
+
+        Returns
+        -------
+        possible_crossings : vector of numerics
+            distance values at crossing.
+        times_of_possible_crossings : vector of numerics
+            Times of crossings.
+
+        """
+        distances = self.get_distances(**kwargs_for_distances)
+        average_noise_floor, average_noise_amplitude = self.get_noise_floor(**kwargs_for_distances, final_averaging_window=final_averaging_window)
         distances_h, distances_w, _ = distances
         distances_above_noise_floor_h = distances_h[distances_h>=(average_noise_floor+5*average_noise_amplitude)[0]] # Crossings after the noise floor won't tell us very much
         distances_above_noise_floor_w = distances_w[distances_h>=(average_noise_floor+5*average_noise_amplitude)[0]] # That's not a typo in the index --we want distances_above_noise_floor_w to have the same shape as distances_above_noise_floor_h
@@ -393,7 +409,7 @@ class Ensemble(object):
             self.p_values = scipy.stats.kstest(self.data, ref, axis=1).pvalue
         return self.p_values
     
-    def t_eq(self, threshold=None, **kwargs_for_distances):
+    def t_eq(self, threshold=None, calculate_unsmoothed_threshold=False, **kwargs_for_distances):
         """
         Calculate the equilibration time by finding the first passage time for when the system "reaches" the noise.
 
@@ -408,6 +424,12 @@ class Ensemble(object):
             equilibration times.
 
         """
+        if calculate_unsmoothed_threshold:
+            new_kwargs_for_distances = kwargs_for_distances.copy() # copy so that we can mutate
+            new_kwargs_for_distances['use_smoothing']=False
+            unsmoothed_distances = self.get_distances(**new_kwargs_for_distances)
+            if threshold is None:
+                threshold = unsmoothed_distances[-1].mean()+5*unsmoothed_distances[-1].std()
         distances = self.get_distances(**kwargs_for_distances)
         if threshold is None:
             threshold = distances[-1].mean()+5*distances[-1].std()
@@ -416,7 +438,7 @@ class Ensemble(object):
     
     def get_subensembles(self, num_splits = 10):
         """
-        Partition the ensemble into multiple sub-ensembles by randomly selecting particles.
+        Partition the ensemble into multiple sub-ensembles by randomly selecting particles. If num_splits does not evenly divide N, we discard (N%num_splits)-many particles so that we get evenly sized subensembles.
 
         Parameters
         ----------
@@ -428,7 +450,8 @@ class Ensemble(object):
         list of Ensemble objects
             subensembles, randomly shuffled from the original data.
         """
-        particle_selections = np.arange(self.N)
+        N_reduced = self.N-(self.N%num_splits) # Reduce N so
+        particle_selections = np.arange(N_reduced)
         np.random.shuffle(particle_selections) # Shuffle inplace
         index_lists = np.array_split(particle_selections, num_splits)
         subensembles = []
@@ -436,7 +459,7 @@ class Ensemble(object):
             subensembles.append(Ensemble(self.data.loc[:,index_lists[i],:], self.potential)) # Use index_lists to choose trajectories for each subensemble
         return subensembles
     
-    def sub_t_eq(self, num_splits=10, threshold=None, n_val = None):
+    def sub_t_eq(self, num_splits=10, threshold=None, n_val = None, distance_function=distance_functions.L1):
         """
         Get a series of values of t_eq by dividing the ensembles into subensembles and calculating the t_eq for each subensemble.
 
@@ -448,6 +471,8 @@ class Ensemble(object):
             Noise threshold. The default is None.
         n_val : numeric, optional
             n from Bechhoefer and Sane. The default is None.
+        distance_function : function, optional
+            Distance function to use. The default is distance_functions.L1.
 
         Returns
         -------
@@ -459,12 +484,13 @@ class Ensemble(object):
         subensembles = self.get_subensembles(num_splits=num_splits)
         t_eq_vals = []
         set_threshold_automatically = (threshold is None) # threshold is mutated in the loop so this needs to be declared beforehand
-        for subensemble in subensembles:
+        for subensemble in tqdm(subensembles):
             if set_threshold_automatically:
-                dist = subensemble.get_distances()[-1]
+                dist = subensemble.get_distances(distance_function=distance_function)[-1]
                 threshold = np.median(dist)+n_val*(np.max(dist)-np.median(dist))
             t_eq_vals.append(subensemble.t_eq(threshold=threshold))
         return np.array(t_eq_vals)
+    
     def t_eq_from_p_vals(self, *args, threshold=None):
         """
         Calculate t_eq using the place where the p_val reaches the noise.
@@ -532,7 +558,7 @@ class Ensemble(object):
         plt.show()
         return None
 
-    def gut_checks(self, init=0, mid=341, end=6000, plot_init=False, plot_end=False, num_bins=100):
+    def gut_checks(self, init=0, mid=341, end=6000, plot_init=True, plot_end=True, num_bins=100):
         """
         Plot a bunch of things just to verify that everything's working properly. Also return the variables we plot just in case we want to manipulate them somehow.
 
@@ -571,12 +597,12 @@ class Ensemble(object):
             ax[i].bar(bins, heights_mid[i,:], color = 'orange', width = self.dx, label=f"t={mid}"*(i==0), alpha=0.3)
             ax[i].bar(bins, heights_end[i,:], color = 'green', width = self.dx, label=f"t={end}"*(i==0), alpha=0.3)
             if plot_init:
-                heights_init_pred = self.potential.boltzmann_array(bins, k_BT=self.temperatures[i])/self.dx
+                heights_init_pred = self.potential.boltzmann_PMF(bins, k_BT=self.temperatures[i])/self.dx
                 chi_squared = np.sum((heights_init[i,:] - heights_init_pred)**2 / heights_init_pred)
                 print(f"Initial histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
                 ax[i].plot(bins, heights_init_pred, 'red', label=r"$\pi(x;T_0)$"*(i==0)) # fr-strings are both formatted strings and raw strings, apparently
             if plot_end:
-                heights_end_pred = self.potential.boltzmann_array(bins, k_BT=self.temperatures['c'])/self.dx # Final distro is always the cold one
+                heights_end_pred = self.potential.boltzmann_PMF(bins, k_BT=1)/self.dx # Final distro always has T=1
                 ax[i].plot(bins, heights_end_pred, 'blue', label=r"$\pi(x;T_c)$"*(i==0))
                 chi_squared = np.sum((heights_end[i,:] - heights_end_pred)**2 / heights_end_pred)
                 print(f"Final histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
@@ -660,7 +686,7 @@ class Ensemble(object):
         plt.show()
         return ani
 
-    def export_raw_data(self, filename, extension = ".csv"):
+    def export_data(self, filename, extension = ".csv"):
         """
         Convert the ensemble data into as many csv files as there are temperatures.
 
@@ -701,7 +727,7 @@ class Ensemble(object):
         distances_df.to_csv(filename)
         return None
 
-def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x', 't', 'V', 'state', 'drift'], temperatures=[1000,12,1], gut_checks=True):
+def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x', 't', 'V', 'state', 'drift', 'x0'], temperatures=[1000,12,1], gut_checks=True, process_data = False, distance_function=distance_functions.L1):
     """
     High-level functions to run all of the basic analysis defined here.
 
@@ -733,18 +759,24 @@ def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, colum
 
     """
     # I've only defined Asymmetric_DoubleWell_WithMaxSlope but in principle any class with the right keywords can be defined
-    data = file_processing.extract_file_data(filenames, protocol_time=protocol_time, dt=dt, column_names=column_names, temperatures=temperatures)
+    data = file_processing.extract_file_data(filenames, protocol_time=protocol_time, dt=dt, column_names=column_names, temperatures=temperatures)[0]
     # data has the form we want of an ensemble
     ensemble = Ensemble(data, potential)
+    print(potential) # Summary stats of potential
     if gut_checks:
-        ensemble.gut_checks()
-    distances = ensemble.get_distances()
+        ensemble.gut_checks(plot_init=True)
+    distances = ensemble.get_distances(distance_function=distance_function)
     energies = ensemble.get_average_energy()
     times = ensemble.data.t
     fig2, ax2 = plt.subplots(2)
     ax2[0].loglog(times, distances.T)
     ax2[1].loglog(times, energies.T)
-    return times, distances, energies
+    if process_data:
+        today = pd.to_datetime('today').strftime('%Y_%m_%d')
+        filename = today+f", x_max={ensemble.potential.x_max}, N={ensemble.N}"
+        ensemble.export_data(filename, distance_function=distance_function) # Process the data and store it.
+
+    return ensemble
 
 
 def backwards_cumulative_max(data, axis=0):
