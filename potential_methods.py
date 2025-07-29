@@ -3,7 +3,7 @@
 potential_methods.py.
 
 Created on Wed Jun 11 10:22:16 2025
-v1.2
+v1.3
 
 @author: sane
 Creates classes that can be used to add a bunch of handy attributes to various kinds of potentials.
@@ -170,7 +170,7 @@ class BoundedForcePotential(Potential):
     
     def __init__(self, *args, **kwargs):
         # cls.__init__(self, *args, **kwargs) # Initialise the parent class so we can use the variables defined there. args and kwargs are stuff (eg. relevant parameters) to be passed up to the parent class.
-        super().__init__(self, *args, **kwargs)
+        super().__init__()
         x = sym.symbols('x') # Define symbols for numeric computation
         self.F_0 = sym.lambdify(x, sym.diff(-self.U_0(x))) # Precompute the derivative and store it as a lambda function. Precomputing is very important for speed.
         def _newton_raphson_solver(f, x_0, max_iterations = 100, dx = 1e-6, return_error=False, tolerance = 1e-5, debug_mode=False):

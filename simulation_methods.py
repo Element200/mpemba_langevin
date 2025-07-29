@@ -3,7 +3,7 @@
 simulation_methods.py.
 
 Created on Wed Jun 11 14:42:20 2025
-v1
+v1.1
 
 @author: sane
 Contains methods to integrate the Langevin equation, effectively simulating what the setup defined in Kumar and Bechhoefer (2020) does
@@ -67,7 +67,7 @@ def langevin_simulation(x_0, dt=dt, gamma=gamma, expt_length = expt_length, forc
         x[...,i] = x_i # 'Append' to the preallocated array
     return x
 
-def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = lambda t: k_BT_b, num_allowed_initial_positions=100_000,dt=1e-5, expt_length=1e-1, save_memory=False):
+def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = lambda t: k_BT_b, num_allowed_initial_positions=100_000,dt=1e-5, expt_length=1e-1, save_memory=False, gamma=gamma):
     """
     Simulate the experiment in Bechhoefer and Kumar (2020) by choosing an initial position from a Boltzmann distribution and integrating the Langevin equation that it corresponds to.
 
@@ -108,7 +108,7 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = la
         if len(p_arr.shape)>1:
             p_arr = p_arr[0,:] # If multiple redundant temperatures, pick the first of the identical probability distros
         x = np.random.choice(active_range, num_particles, p=p_arr) # draw initial position from its probability distribution
-        results.append(langevin_simulation(x, force=potential.F, temperature_function=quench_protocol, expt_length=expt_length))
+        results.append(langevin_simulation(x, force=potential.F, temperature_function=quench_protocol, expt_length=expt_length, gamma=gamma))
     if save_memory:
         results = np.array(results, dtype=np.float32) # Change to single-precision floating point
     return xr.DataArray(results, coords = [('T', k_BTs), ('n', np.arange(0,num_particles,1)),('t', times)])

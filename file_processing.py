@@ -3,7 +3,7 @@
 file_processing.py.
 
 Created on Wed Jun 11 14:46:01 2025
-v1.2
+v1.3
 
 @author: sane
 Contains methods to convert file data into an object that the Ensemble class in mpemba.py can operate on.

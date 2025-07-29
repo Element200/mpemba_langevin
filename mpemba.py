@@ -1,7 +1,7 @@
 """
 mpemba.py.
 
-v1.2
+v1.3
 @author: sane
 Contains high-level functions to perform analysis of Mpemba experiments
 """
@@ -87,7 +87,7 @@ class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
         self.x_max = x_max
         self.F_left = F_left
         self.F_right = force_asymmetry*F_left
-        super().__init__(self) # Initialise the parent class *after* useful variable are defined so that it knows what variables to use
+        super().__init__() # Initialise the parent class *after* useful variable are defined so that it knows what variables to use
         return None
     
     def U_0(self, x, t=None):
@@ -685,6 +685,26 @@ class Ensemble(object):
         ani = animation.FuncAnimation(fig, update, frames=animated_frames, interval=10, blit=False, cache_frame_data=True)
         plt.show()
         return ani
+    
+    def compare_to_simulations(self, D):
+        """
+        Run a simulation with the same parameters and return an ensemble to compare against.
+
+        Parameters
+        ----------
+        D : numeric
+            Diffusive constant for the simulation to use. Every other parameter can be inferred from the potential object.
+
+        Returns
+        -------
+        simulated_ensemble : Ensemble object
+            An ensemble containing data from a Langevin simulation with the same conditions as the experiment.
+
+        """
+        gamma = self.temperatures.min()/D # gamma = k_BT/D
+        simulated_data = simulation_methods.run_mpemba_simulations(k_BTs=self.temperatures, num_particles=self.N, potential=self.potential, expt_length=self.expt_length, save_memory=True, gamma=gamma)
+        simulated_ensemble = Ensemble(simulated_data, self.potential)
+        return simulated_ensemble
 
     def export_data(self, filename, extension = ".csv"):
         """
