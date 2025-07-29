@@ -214,8 +214,8 @@ class Ensemble(object):
             return self.bins, self.heights # Don't do all this work if you've already done it before
         
         # binned_active_domain = np.linspace(x_min, x_max, bins) # In principle you should use binned_active_domains for computations but it's possible that the particles leave the box, in which case histogramming should be done over the full range of possible positions to avoid bugs.
-        self.global_min = np.min(self.data)
-        self.global_max = np.max(self.data)
+        self.global_min = np.min(self.data).data
+        self.global_max = np.max(self.data).data
         binned_active_range = np.linspace(self.global_min, self.global_max, num_bins)
         self.dx = binned_active_range[1]-binned_active_range[0]
 
