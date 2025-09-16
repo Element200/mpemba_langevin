@@ -1,7 +1,9 @@
 """
 mpemba.py.
 
-v1.3
+Created super long ago (I forgor)
+v1.4
+
 @author: sane
 Contains high-level functions to perform analysis of Mpemba experiments
 """
@@ -26,8 +28,11 @@ try:
     import potential_methods
     import simulation_methods
     import file_processing
+    import quench_methods
+    import special_potentials
 except ImportError:
     print("Something went wrong when importing dependencies! Make sure local imports are in the same directory as this file")
+    raise ImportError
 
 dt = 1e-5
 expt_length = 6e-2
@@ -55,12 +60,12 @@ def fast_histogram(arr, num_bins, bin_range):
     num_bins : int
         Number of bins (to get numpy histogram-like results, always set this to be the desired number of bins minus one).
     bin_range : array of length 2
-        .
+        x_min and x_max to bin between.
 
     Returns
     -------
     hist : 3D vector of numerics
-        DESCRIPTION.
+        PDF associated with arr.
 
     """
     n_temps, n_rows, n_timesteps = arr.shape
@@ -69,14 +74,17 @@ def fast_histogram(arr, num_bins, bin_range):
     for j in numba.prange(n_temps):
         for i in numba.prange(n_timesteps):
             for val in arr[j,:,i]:
-                bin_idx = np.int32((val - bin_range[0]) // bin_width) # This will produce weird results if any element is outside bin_range.
-                hist[j, bin_idx, i] += 1/(n_rows*bin_width) # For PDF
+                if np.isfinite(val): # So that this doesn't fail when given nan values
+                    bin_idx = np.int32((val - bin_range[0]) // bin_width) # This will produce weird results if any element is outside bin_range.
+                    hist[j, bin_idx, i] += 1/(n_rows*bin_width) # For PDF
+                else:
+                    hist[j, bin_idx, i] = np.nan # If asked to histogram over NaN values, the height of each bin should be NaN.
     return hist
 
 
 
 class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
-    """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Decorating with @BoundedForcePotential will add all other necessary methods."""
+    """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Inheriting from BoundedForcePotential will add all other necessary methods."""
     
     def __init__(self, E_barrier=2, E_tilt=1.3, x_well=0.5, x_min=-1, x_max=2, F_left=50, force_asymmetry=1):
         """Define parameters used in the potential."""
@@ -87,7 +95,7 @@ class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
         self.x_max = x_max
         self.F_left = F_left
         self.F_right = force_asymmetry*F_left
-        super().__init__() # Initialise the parent class *after* useful variable are defined so that it knows what variables to use
+        super().__init__() # Initialise the parent class *after* useful variables are defined so that it knows what variables to use
         return None
     
     def U_0(self, x, t=None):
@@ -141,6 +149,28 @@ class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
         """
         return self.__str__()
     
+def quench_protocol(k_BT_h, t, tau=1e-5, k_BT_b=1):
+    """
+    Exponential quench decay function.
+
+    Parameters
+    ----------
+    k_BT_h : Numeric
+        Initial temperature.
+    t : Numeric or vector of numerics
+        Time.
+    tau : numeric, optional
+        Decay constant. The default is 1e-5.
+    k_BT_b : Numeric, optional
+        Bath temperature. The default is 1.
+
+    Returns
+    -------
+    Numeric or vector of numerics
+        Quenching temperature at time t.
+
+    """
+    return (k_BT_h-k_BT_b)*np.exp(-t/tau)+k_BT_b
 
 class Ensemble(object):
     """Contains methods to do useful things with trajectory data obtained either experimentally or via simulations (the class is deliberately agnostic as to where the data comes from)."""
@@ -255,8 +285,7 @@ class Ensemble(object):
         Parameters
         ----------
         eqbm_boltzmann_distro : 1D array, size = len(self.bins), optional
-            PMF (*not* PDF) of the Boltzmann distribution at the cold temperature. The size of
-        the number of bins, otherwise taking the distance WILL fail. The default is the boltzmann array for the temperature corresponding to temperature 'c'. (If 'c' is not in the list of temperatures, this must be explicitly defined.)
+            PMF (*not* PDF) of the Boltzmann distribution at the cold temperature. The size of the number of bins, otherwise taking the distance WILL fail. The default is the *analytic* boltzmann array for the temperature corresponding to the lowest temperature. 
         distance_function: function, optional
             The distance function to use. This must take in three arguments and an optional argument called 'axis'. The default is L1.
         use_smoothing : bool, optional
@@ -515,7 +544,7 @@ class Ensemble(object):
         return np.array([self.data['t'][p_values[i,:]>=threshold][0].to_numpy() for i in range(self.data.shape[0]-1)]) # This list comprehension will run quickly because the number of temperatures is generally small. Exclude the last (cold) temperature because this will trivially be 0.
         
     
-    def plot_distances(self, colors=['r','b','k'], **kwargs_for_distances):
+    def plot_distances(self, colors=['r','b','k'], xlim=None, **kwargs_for_distances):
         """
         Plot distances.
 
@@ -531,7 +560,10 @@ class Ensemble(object):
         """
         distances = self.get_distances(**kwargs_for_distances)
         for i in range(self.num_temperatures):
-            plt.loglog(self.data.t, distances[self.num_temperatures-i-1], color=colors[self.num_temperatures-i-1])
+            distance_data = distances[self.num_temperatures-i-1]
+            mask = np.isfinite(distance_data) # To ensure connected lines even when there are nan values in the distances
+            plt.loglog(self.data.t[mask], distance_data[mask], color=colors[self.num_temperatures-i-1])
+        plt.xlim(xlim)
         return None
     
     def plot_sample_trajectories(self, num_trajectories = 4, temp=None):
@@ -693,7 +725,7 @@ class Ensemble(object):
         Parameters
         ----------
         D : numeric
-            Diffusive constant for the simulation to use. Every other parameter can be inferred from the potential object.
+            Diffusion constant for the simulation to use. Every other parameter can be inferred from the potential object.
 
         Returns
         -------
