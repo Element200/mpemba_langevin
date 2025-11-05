@@ -32,12 +32,25 @@ expt_length = 6e-2
 F = lambda x: -x
 x_min = -1
 x_max = 3
-D = 170 # px^2/s
+D = 150 # px^2/s
 k_BT_b = 1
 gamma = k_BT_b/D #0.02
 E_barrier,E_tilt, F_left, x_well, force_asymmetry = 2,1.3,50,0.5,1 # for testing purposes
 
-def langevin_simulation(x_0, dt=dt, gamma=gamma, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1):
+def fast_CDF_inverter(f, n_x=512):
+    x = np.linspace(0,1, n_x)
+    f_vals = f(x)
+    f_inv = scipy.interpolate.interp1d(f_vals, x) # Swap y argument and x argument to get an approximate inverse function
+    return f_inv
+    
+
+def inverse_transform_sampler(num_samples, CDF, interpolation_mesh_size=100, n_x=512):
+    uniform_samples = np.random.random(num_samples) # Drawn from U[0,1]
+    CDF_inv = fast_CDF_inverter(CDF, n_x=n_x)
+    return CDF_inv(uniform_samples)
+    
+
+def langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1):
     """
     Integrate (the Ito way) the SDE dx = F(x)/gamma * dt + D(x,t)*eta(t), where eta is a normally distributed random number, from t=0 to t=expt_length.
 
@@ -117,7 +130,7 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = No
         raise ValueError("At least one reference temperature must exist!")
     active_range = np.linspace(potential.x_min, potential.x_max, num_allowed_initial_positions)
     results = []
-    initial_distro = xr.DataArray([potential.boltzmann_PMF(active_range,k_BT) for k_BT in k_BTs], coords=(k_BTs, active_range), dims=(['T','x']))
+    initial_distro = xr.DataArray(potential.boltzmann_PMF(active_range,k_BTs), coords=(k_BTs, active_range), dims=(['T','x'])) # Slow -- needs fixing
     
     # (len(k_BTs) x num_allowed_initial_positions) array to draw positions from
     times = np.arange(0,expt_length,dt)
@@ -128,7 +141,7 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = No
     for k_BT in k_BTs:
         
         quench_protocol.set_a(k_BT/k_BT_b-1)
-        p_arr=initial_distro.loc[k_BT]
+        p_arr = initial_distro.loc[k_BT]
         if len(p_arr.shape)>1:
             p_arr = p_arr[0,:] # If there are multiple redundant temperatures, pick the first of the identical probability distros
         x = np.random.choice(active_range, num_particles, p=p_arr) # draw initial position from its probability distribution
@@ -138,7 +151,7 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = No
             results.append(langevin_simulation(x, force= time_dependent_force, temperature_function=lambda t: k_BT_b, expt_length=expt_length, gamma=gamma)) # Transform the time using this trick and reset the quench protocol to be D(t) = k_BT_b, the instantaneous quench
         
         else:
-            results.append(langevin_simulation(x, force=lambda x, t: potential.F(x), temperature_function=lambda t: quench_protocol.h(t), expt_length=expt_length, gamma=gamma))
+            results.append(langevin_simulation(x, force=lambda x, t: potential.F(x), temperature_function=lambda t: quench_protocol.h(t), expt_length=expt_length, gamma=gamma, k_BT_b=k_BT_b))
     
     if save_memory:
         results = np.array(results, dtype=np.float32) # Change to single-precision floating point to save some memory

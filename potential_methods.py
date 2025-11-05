@@ -13,7 +13,7 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 import sympy as sym
-
+import pandas as pd
 
 class Potential(object):
     """Takes in a functional form of a potential and defines a bunch of handy functions."""
@@ -120,9 +120,10 @@ class Potential(object):
             integration_bounds = [self.x_min, self.x_max]
         Z = scipy.integrate.quad_vec(lambda x: self._boltzmann_unnormalised(x, k_BT), *integration_bounds)[0]
         func = lambda x, k_BT: self._boltzmann_unnormalised(x, k_BT)/Z # Normalise the PDF
-        if type(k_BT) == np.ndarray:
-            k_BT = k_BT[np.newaxis, :] # So that we can get a 2D output
-            x = x[:,np.newaxis]
+        if hasattr(k_BT, '__iter__'): # Check if k_BT is iterable
+            k_BT = np.array(k_BT)[:, np.newaxis] # So that we can get a 2D output
+            x = x[np.newaxis, :]
+            Z = Z[:,np.newaxis]
         return func(x, k_BT)
     def boltzmann_PMF(self, x, k_BT, **kwargs):
         """
@@ -134,8 +135,6 @@ class Potential(object):
             Position(s).
         k_BT : numeric
             Temperature.
-        **kwargs : key-word arguments
-            Key-word args for boltzmann().
 
         Returns
         -------
@@ -143,9 +142,16 @@ class Potential(object):
             PDF evaluated at x.
 
         """
-        f = self.boltzmann(x, k_BT, **kwargs)
-        return f/f.sum(axis=0)
-    def boltzmann_CDF(self, x, k_BT, **kwargs):
+        if hasattr(k_BT, '__iter__'): # Check if k_BT is iterable
+            k_BT = np.array(k_BT)[np.newaxis,:] # So that we can get a 2D output
+            x = x[:,np.newaxis]
+            
+        P = self._boltzmann_unnormalised(x, k_BT)
+        integration_axis = 0
+        Z = P.sum(axis=integration_axis)
+        if hasattr(k_BT, '__iter__'): Z = Z[np.newaxis,:]
+        return P/Z
+    def boltzmann_CDF(self, x, k_BT):
         """
         Calculate the CDF of the boltzmann distribution at temperature k_BT. Since this is done numerically, we just cumsum the boltzmann_array.
 
@@ -155,8 +161,6 @@ class Potential(object):
             Positions to evaluate the CDF at.
         k_BT : numeric
             Temperature.
-        **kwargs : key-word arguments
-            Key-word args for boltzmann().
 
         Returns
         -------
@@ -164,14 +168,78 @@ class Potential(object):
             CDF evaluated at x.
 
         """
-        PDF = self.boltzmann_PMF(x, k_BT, **kwargs)/self.dx
-        CDF = np.cumsum(PDF, axis=0)*self.dx
+        PDF = self.boltzmann_PMF(x, k_BT)
+        CDF = np.cumsum(PDF, axis=len(PDF.shape)-1)
         return CDF
+    
+    def generate_CDF_array(self, n_x, k_BT, export=True, filename=None):
+        """
+        Generate a Boltzmann CDF at temperature k_BT and export it as a .txt file for the LabVIEW code to use.
+
+        Parameters
+        ----------
+        n_x : int
+            Mesh size.
+        k_BT : Numeric
+            Temperature.
+        export : bool, optional
+            Whether to export. The default is True.
+        filename : str, optional
+            The filename of the exported object. By default, we automatically generate this.
+
+        Returns
+        -------
+        CDF_array : vector of numerics.
+
+        """
+        mesh = np.linspace(self.x_min, self.x_max, n_x)
+        CDF = self.boltzmann_CDF(mesh, k_BT=k_BT)
+        if export:
+            if filename is None:
+                filename = f"T={k_BT}.txt"
+            pd.DataFrame(CDF).to_csv(filename, index=False, header=False, float_format="%.6f")
+        return CDF
+    
+    def get_extent(self, k_BT, runs = 1000, samples_per_run = 10_000):
+        """Given an initial temperature, find the average maximum and minimum extents of the particle trajectories."""
+        x = np.linspace(-20, 20, 10_000)
+        CDF = self._boltzmann_unnormalised(x, k_BT).cumsum()
+        CDF /= CDF[-1] # Normalise
+        inverse_CDF = scipy.interpolate.interp1d(CDF, x, kind='cubic') # Cheap to call
+        # inverse_CDF = scipy.optimize.fsolve(lambda x: CDF(x)-x, x0=0.5)
+        samples = inverse_CDF(np.random.random((runs, samples_per_run))) # inverse transform sampling
+        max_vals = np.max(samples, axis=1)
+        min_vals = np.min(samples, axis=1)
+        return min_vals.mean(),max_vals.mean()
+        
+    def mass_in_box(self, k_BT):
+        """
+        Find the proportion of probability mass enclosed in the 'box' [x_min, x_max] compared to the mass over the whole real line.
+
+        Parameters
+        ----------
+        k_BT : numeric
+            Temperature.
+
+        Returns
+        -------
+        Numeric
+            Ratio of mass in the 'box' [x_min, x_max} to the total mass over the entire real line.
+
+        """
+        Z_1 = scipy.integrate.quad(lambda x: self._boltzmann_unnormalised(x, k_BT), self.x_min, self.x_max)[0]
+        Z_2 = scipy.integrate.quad(lambda x: self._boltzmann_unnormalised(x, k_BT), -np.inf, np.inf)[0]
+        return Z_1/Z_2
+    
+    def average_energy_in_box(self, k_BT):
+        E = scipy.integrate.quad(lambda x: self.U(x)*self._boltzmann_unnormalised(x, k_BT), self.x_min, self.x_max)[0]
+        Z = scipy.integrate.quad(lambda x: self._boltzmann_unnormalised(x, k_BT), self.x_min, self.x_max)[0]
+        return E/Z
     
     def right_half_probability_ratio(self, k_BTs, use_infinite_domain = True):
         """
         Compute the probability mass on the right hand side of the barrier.
-
+        
         Parameters
         ----------
         k_BTs : vector of numerics
@@ -190,7 +258,6 @@ class Potential(object):
             Probability ratios for each temperature.
 
         """
-        
         x_barrier = scipy.optimize.fsolve(self.F_0, x0=0) # Find the barrier position (should be close to zero)
         if np.abs(x_barrier) > self.x_well:
             raise ValueError("Failed barrier calculation")
@@ -238,7 +305,7 @@ class Potential(object):
         diag_plus = np.exp(dU/2)
         diag_minus = np.exp(-dU/2)
         diag_0 = -np.array([0, *diag_plus])-np.array([*diag_minus, 0])
-        S = scipy.sparse.diags([diag_minus, diag_0, diag_plus], [-1,0,1]) # Assumes force is not varying with time
+        S = np.diag(diag_0, k=0) + np.diag(diag_plus, k=+1) + np.diag(diag_minus, k=-1)  # Assumes force is not varying with time
         return S
     def W_matrix(self, x, D, h=lambda t: 1, t=None):
         """
@@ -258,12 +325,59 @@ class Potential(object):
         Returns
         -------
         W
-            Sparse matrix of dimensions len(x)*len(x) that acts as a Fokker-Planck operator.
+            Matrix of dimensions len(x)*len(x) that acts as a Fokker-Planck operator.
 
         """
         S = self.grima_newman_discretisation(x)
         dx = x[1]-x[0] # Assumes uniform spacing
         return h(t)*D*S/dx**2
+    
+    def eigs_k(self, D, k=2, x=None, imaginary_tolerance = 1e-4, n_x=500):
+        """
+        Get k`th eigenvalue lambda_k and associated eigenfunction v_k, assuming an initial state characterised by p_0. We compute eigenfunctions by taking the eigenvectors of the W-matrix we define using the Grima-Newman method.
+
+        Parameters
+        ----------
+        D : numeric, optional
+            Diffusivity. 
+        k : int, optional
+            The index of the eigenfunction to compute. The default is 2.
+        x : vector of numerics, optional
+            Mesh to compute the eigenvector over. The default is n_x evenly spaced numbers between x_max and x_min. x must be evenly spaced.
+        imaginary_tolerance : numeric, optional
+            Maximum allowable size of the imaginary component of the eigenvalue. Theoretically it should be zero, so if it's too high that's an indication that something is wrong.
+        n_x : int, optional
+            The number of points in the default mesh. The default is 500.
+
+        Returns
+        -------
+        numeric
+            k`th eigenfunction lambda_k
+        vector of numerics
+            k`th right eigenvector v_k.
+        vector of numerics
+            k`th left eigenvector u_k.
+
+        """
+        if x is None:
+            x = np.linspace(self.x_min, self.x_max, n_x)
+        dx = x[1]-x[0]
+        S = self.grima_newman_discretisation(x) # If S is not too huge, ndarrays should be fine
+        # We don't need the W-matrix at all since W = scale_factor*S, which will only affect eigenvalues, which we don't care about anyway
+        eigenvals, left_eigenvecs, right_eigenvecs = scipy.linalg.eig(S, right=True, left=True)
+        abs_eigenvals_index = np.abs(eigenvals).argsort()
+        
+        eigenvals_sorted = eigenvals[abs_eigenvals_index]
+        right_eigenvecs_sorted = right_eigenvecs[:,abs_eigenvals_index]
+        left_eigenvecs_sorted = left_eigenvecs[:,abs_eigenvals_index]
+        
+        right_eigenvec_k = right_eigenvecs_sorted[:,k-1].real # k-1 because of 0-indexing. Take the real part because all eigenvectors should be purely real anyway
+        left_eigenvec_k = left_eigenvecs_sorted[:,k-1].real
+        
+        eigenval_k = eigenvals_sorted[k-1]
+        if np.abs(eigenval_k.imag) > imaginary_tolerance:
+            raise ValueError("Eigenvectors were not correctly computed")
+        return eigenval_k*D/dx**2, left_eigenvec_k, right_eigenvec_k # Eigenvalues are affected by a scale factor
     
     def a_k(self, p_0, k=2, x=None, imaginary_tolerance = 1e-4):
         """
@@ -288,22 +402,8 @@ class Potential(object):
         """
         if x is None:
             x = np.linspace(self.x_min, self.x_max, len(p_0))
-        assert len(x) == len(p_0), "Size mismatch between x and p_0."
-        S = self.grima_newman_discretisation(x).toarray() # If S is not too huge, ndarrays should be fine
-        # We don't need the W-matrix at all since W = scale_factor*S, which will only affect eigenvalues, which we don't care about anyway
-        eigenvals, left_eigenvecs, right_eigenvecs = scipy.linalg.eig(S, right=True, left=True)
-        abs_eigenvals_index = np.abs(eigenvals).argsort()
-        
-        eigenvals_sorted = eigenvals[abs_eigenvals_index]
-        right_eigenvecs_sorted = right_eigenvecs[:,abs_eigenvals_index]
-        left_eigenvecs_sorted = left_eigenvecs[:,abs_eigenvals_index]
-        
-        right_eigenvec_k = right_eigenvecs_sorted[:,k-1].real # k-1 because of 0-indexing. Take the real part because all eigenvectors should be purely real anyway
-        left_eigenvec_k = left_eigenvecs_sorted[:,k-1].real
-        
-        eigenval_k = eigenvals_sorted[k-1]
-        if np.abs(eigenval_k.imag) > imaginary_tolerance:
-            raise ValueError("Eigenvectors were not correctly computed")
+        assert len(x) == len(p_0), f"Size mismatch between x ({x.shape}) and p_0 ({p_0.shape})."
+        eigenval_k, left_eigenvec_k, right_eigenvec_k = self.eigs_k(D=1,k=k, x=x, imaginary_tolerance=imaginary_tolerance) # eigenval_k doesn't matter, so D doesn't matter either.
         
         return (left_eigenvec_k @ p_0)/(left_eigenvec_k @ right_eigenvec_k) # Numerical integration, computes [<u_k|p_0>/<u_k|v_k>    
 
@@ -330,7 +430,7 @@ class Potential(object):
         pi_0 = self.boltzmann_PMF(x, k_BT)
         return self.a_k(pi_0, x=x, **kwargs_for_a_k)
     
-    def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, method='a_2', tolerance=1e-3, use_infinite_domain=False):
+    def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, method='a_2', tolerance=1e-3, use_infinite_domain=False, return_max_a = False):
         """
         Check if a fast Mpemba effect exists and if so, find the temperature at which it occurs.
 
@@ -363,6 +463,9 @@ class Potential(object):
         # Exclude arr[0] because that will trivially always be True.
         if fastMpembaEffectOccurs:
             print("Strong Mpemba effect detected!")
+            if return_max_a and (method=='a_2'):
+                lowest_a_2 = k_BTs[1:][closeToTarget][0]
+                k_BTs[1:][closeToTarget], k_BTs[(arr==arr[arr<lowest_a_2].max())]
             return k_BTs[1:][closeToTarget]
         else:
             print("No strong Mpemba effect detected.")
@@ -512,4 +615,3 @@ class FlatBoundedPotential(Potential):
         """
         return self.__str__()
         
-    

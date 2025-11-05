@@ -67,8 +67,7 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
     dataframe : pandas.DataFrame
         The raw data with column names set appropriately. This code will fail if certain column names do not exist.
     state_to_extract : str, optional
-        state to extract. The code will throw away the other states to save memory.
-        If state_to_extract represents a state with non fixed-length data, this code will break.
+        state to extract from the data (duh). The code will throw away the other states to save memory. If state_to_extract represents a state with non fixed-length data, this code will break, so do not set this to 'positioning'.
     state_phase_lag : int, optional
         If the state resets at the moment the time variable is also reset to 0, this is equal to zero. If it lags by 1, set this to one, etc. The default is 0 (i.e. assuming that the state variable resets properly with time).
     states : dict, optional
@@ -94,21 +93,26 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
         if len(chunk) == expected_length:
             chunks.append(chunk) # Avoid adding a trajectory if there's some weirdness in the chunk splitting that causes nonuniformity.
 
-    chunks = np.array(chunks)
+    chunks = np.array(chunks) # This is always the step that breaks if you have data with uneven column sizes.
     data_cols = list(dataframe.columns)
     cols_to_extract = {col: data_cols.index(col) for col in data_cols if (not col in ['t','state', 'T'])} # We extract all of the columns except for time and state
     t_index = data_cols.index('t') # Get index of the time column
-    T_index = data_cols.index('T')
+    T_index = data_cols.index('T') # Get index of temperature column
+    
+    temp_index = list(set(dataframe['T'])) # Get all unique temperature indices
+    temp_dict = {temp: temperatures[i] for i, temp in enumerate(temp_index)}
     num_protocols = np.inf
     split_chunks = []
-    for T in T_index:
-        split_chunk = chunks[chunks[...,data_cols.index('T')]==T]
-        split_chunks.append(split_chunk)
-        if num_protocols > len(split_chunk):
-            num_protocols = len(split_chunk)
-    adjusted_chunks = np.array([split_chunks[:num_protocols, ...]])
-    times = adjusted_chunks[0,:,t_index]*dt # Assumes all time columns are identical
-    return xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =2)
+    for T in temp_index:
+        split_chunk = np.where((chunks[...,3]==T)[...,np.newaxis], chunks, np.nan) # [...,np.newaxis] needed so dimensions are comparable
+        mask = ~np.all(np.isnan(split_chunk), axis=tuple(range(1, split_chunk.ndim)))
+        # Allows us to mask our data without losing dimensional info
+        split_chunks.append(split_chunk[mask])
+        if num_protocols > len(split_chunk[mask]):
+            num_protocols = len(split_chunk[mask])
+    adjusted_chunks = np.array([split_chunks[i][:num_protocols,:] for i,T in enumerate(temp_index)])
+    times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical. This is not strictly true, we're throwing away information about exactly when the state transition happened, but it won't matter later on.
+    return xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
 
 def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','drift','state','x0'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
     """
@@ -149,7 +153,7 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
     # array = xr.DataArray(data, dims=['T','n','t'], coords={'T':temperatures, 't': np.arange(0,protocol_time,dt)})
     return array
 
-def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t','drift','state','x0','T'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
+def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t','drift','state','x0','force','T'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
     """
     Extract file data from new version of protocol that interweaves temperatures.
 
@@ -178,13 +182,13 @@ def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t'
         raise ValueError("No reference temperature!")
     temperatures = sorted(temperatures, reverse = True) # Sort temperatures in descending order
     chunks = {}
-    n_min = np.inf # Minimum number of particles in an array. Initially set to infinity because that's much higher than any experiment will realistically produce
-    chunks = chunk_splitter(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T'])) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
-    array = xr.DataArray(chunks)
+    chunks = chunk_splitter_v2(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']), temperatures=temperatures) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
+    return chunks
+    # array = xr.DataArray(chunks)
     # for var in chunks[filenames[0]].data_vars:
     #     array.append(xr.concat([chunks[filename][var].loc[:n_min,...].assign_coords(t=np.arange(0,protocol_time,dt)) for filename in filenames], pd.Index(temperatures, name='T')))
     # array = xr.DataArray(data, dims=['T','n','t'], coords={'T':temperatures, 't': np.arange(0,protocol_time,dt)})
-    return array
+    # return array
 
 def load_brownian_data(filenames, column_names=['x','t','drift','state','F','x0','T'], cols_to_extract=['x']):
     """
@@ -217,13 +221,36 @@ def load_brownian_data(filenames, column_names=['x','t','drift','state','F','x0'
     return data.iloc[:length, :] # To avoid nan values if importing unevenly sized data
 
 class BrownianEnsemble(object):
+    """Some basic methods to analyse Brownian data and infer trap constant, etc."""
+    
     def __init__(self, data, dt=1e-5):
         self.data = data
         self.dt=dt
     def get_PSD(self, noverlap=50):
+        """TODO."""
         f, P = scipy.signal.welch(self.data, fs=1/self.dt, noverlap=noverlap, axis=0, nperseg=1e6)
 
 def fit_aliased_lorentzian(f, P, dt=1e-5, noverlap=50):
+    """
+    Given a power spectrum and frequency data, fit an aliased Lorentzian to the frequency data.
+
+    Parameters
+    ----------
+    f : vector of numerics
+        Frequencies.
+    P : vector of numerics (same size as f)
+        Power spectrum.
+    dt : numeric, optional
+        Time interval. The default is 1e-5.
+    noverlap : int, optional
+        Number of overlapping windows. The default is 50.
+
+    Returns
+    -------
+    float, float
+        Corner frequency and diffusivity (corrected) respectively).
+
+    """
     def _aliased_lorentzian(f, c, dx, dt=dt):
         return (dt*dx**2)/(1+c**2-2*c*np.cos(2*np.pi*f*dt))
     popt, pcov = scipy.optimize.curve_fit(_aliased_lorentzian, xdata=f, ydata=P, p0=[1,0.05])
@@ -231,15 +258,52 @@ def fit_aliased_lorentzian(f, P, dt=1e-5, noverlap=50):
     f_nyq = 1/dt/2 #f_s/2
     f_c = -f_nyq*np.log(c)/np.pi
     D = (dx**2)/(1-c**2)*2*np.pi*f_c
-    return f_c, D*noverlap/(noverlap-2) # Correct for systematic errors due to LSQ fits -- see Norrelykke and Flyvbjerg (2003)
+    return f_c, D*noverlap/(noverlap-2) 
+# Correct for systematic errors due to LSQ fits -- see Norrelykke and Flyvbjerg (2003)
 
 def aliased_lorentzian(f, f_c, D, dt=1e-5):
+    """
+    Lorentzian with aliasing.
+
+    Parameters
+    ----------
+    f : Numeric or vector of numerics
+        Frequencies to evaluate power spectrum at.
+    f_c : Numeric
+        Corner frequency.
+    D : Numeric
+        Diffusivity.
+    dt : Numeric, optional
+        Sampling interval (1/sampling freq). The default is 1e-5.
+
+    Returns
+    -------
+    S
+        Power spectrum evaluated at frequencies.
+
+    """
     f_nyq = 1/dt/2
     c = np.exp(-np.pi*f_c/f_nyq)
     dx = np.sqrt((1-c**2)*D/(2*np.pi*f_c))
     return (dt*dx**2)/(1+c**2-2*c*np.cos(2*np.pi*f*dt))
 
 def boltzmann_fit(x, num_bins=20):
+    """
+    Given Brownian data from a harmonic potential, fit to a Boltzmann distribution (Gaussian) to estimate the trap constant.
+
+    Parameters
+    ----------
+    x : Vector of numerics
+        Position data for a Brownian potential.
+    num_bins : int, optional
+        Number of bins to use while histogramming. The default is 20.
+
+    Returns
+    -------
+    popt : Array of numerics
+        Trap constant.
+
+    """
     heights, bins = np.histogram(x, bins=num_bins, density=True)
     dx = bins[1]-bins[0]
     x_range = bins[:-1]+dx/2 # Centre the bins
@@ -247,8 +311,10 @@ def boltzmann_fit(x, num_bins=20):
     return popt
 
 def equipartition(x):
+    """Use equipartition to estimate the trap constant, given position data x."""
     sigma_x = np.std(x)
     return 1/sigma_x**2 # Assumes no measurement noise
+
 
 def load_processed_data(filenames, temperatures=[1000,12,1]):
     """

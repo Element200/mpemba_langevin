@@ -48,6 +48,9 @@ def in_range(x, lower, upper):
     """Find whether  lower <= x <= upper."""
     return (x <= upper) & (x >= lower) 
 
+# def memoised_fast_integration(func, x_upper, x_lower):
+    
+
 @numba.njit(parallel=True)
 def fast_histogram(arr, num_bins, bin_range):
     """
@@ -80,74 +83,6 @@ def fast_histogram(arr, num_bins, bin_range):
                 else:
                     hist[j, bin_idx, i] = np.nan # If asked to histogram over NaN values, the height of each bin should be NaN.
     return hist
-
-
-
-class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
-    """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Inheriting from BoundedForcePotential will add all other necessary methods."""
-    
-    def __init__(self, E_barrier=2, E_tilt=1.3, x_well=0.5, x_min=-1, x_max=2, F_left=50, force_asymmetry=1):
-        """Define parameters used in the potential."""
-        self.E_barrier = E_barrier
-        self.E_tilt = E_tilt
-        self.x_well = x_well
-        self.x_min = x_min
-        self.x_max = x_max
-        self.F_left = F_left
-        self.F_right = force_asymmetry*F_left
-        super().__init__() # Initialise the parent class *after* useful variables are defined so that it knows what variables to use
-        return None
-    
-    def U_0(self, x, t=None):
-        """
-        Generate basic potential (without bounded derivatives) evaluated at x.
-
-        Parameters
-        ----------
-        x : numeric or vector of numerics
-            Position(s).
-        t : numeric
-            Time to evaluate potential at
-
-        Returns
-        -------
-        Numeric or vector of numerics
-            Potential evaluated at x at time t. For now this is time-independent.
-
-        """
-        return self.E_barrier*(1-2*(x/self.x_well)**2 + (x/self.x_well)**4) - self.E_tilt*(x/self.x_well)/2
-    
-    def __str__(self):
-        """
-        Print all the variables we use in the potential.
-
-        Returns
-        -------
-        outstring : str
-            String representation of AsymmetricDoubleWellPotential.
-
-        """
-        variables = self.__dict__
-        outstring = "ASYMMETRIC DOUBLE-WELLED QUARTIC POTENTIAL WITH FINITE MAXIMUM SLOPES\n"
-        for var in variables:
-            if not callable(variables[var]):
-                outstring += f"{var} : {variables[var]}\n"
-            else:
-                x = sym.symbols("x")
-                outstring += f"{var}({x}) : {variables[var](x)}\n"
-        return outstring
-    
-    def __repr__(self):
-        """
-        Do the same schtick as __str__ but now we don't have to make a print call.
-
-        Returns
-        -------
-        outstring : str
-            String representation of AsymmetricDoubleWellPotential.
-
-        """
-        return self.__str__()
     
 def quench_protocol(k_BT_h, t, tau=1e-5, k_BT_b=1):
     """
@@ -208,6 +143,7 @@ class Ensemble(object):
         self.bins, self.heights = None, None
         self.distances = None
         self.p_values = None
+        self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
         
         return None
 
@@ -261,23 +197,68 @@ class Ensemble(object):
 
         Parameters
         ----------
-        axis : TYPE, optional
-            DESCRIPTION. The default is 1.
-        **kwargs : TYPE
-            DESCRIPTION.
+        axis : int, optional
+            axis to integrate along. The default is 1.
 
         Returns
         -------
-        bins : TYPE
-            DESCRIPTION.
-        CDFs : TYPE
-            DESCRIPTION.
+        bins : vector of numerics
+            bins from histograms.
+        CDFs : 3D (T,bins,t) vector of numerics
+            CDF value at each bin, for each temperature, for each timestep.
 
         """
         bins, heights = self.get_histograms(**kwargs)
         CDFs = self.dx*heights.cumsum(axis=axis)
         return bins, CDFs
+    
+    def trajectories_outside_box(self, k_BT=None, limits=None):
+        """
+        Find the number of particles that leave the box.
+        
+        Parameters
+        ----------
+        k_BT : numeric, optional
+            temperature to test which particles leave the box. The default is the highest temperature.
+        
+        Returns
+        -------
+        int
+            Number of particles which at at least one point in time have a position outside [x_min, x_max].
 
+        """
+        if k_BT is None:
+            k_BT = float(self.temperatures.max())
+        if limits is None:
+            limits = [self.potential.x_min, self.potential.x_max]
+        trajectories = self.data.loc[k_BT]
+        max_vals = np.max(trajectories, axis=1)
+        min_vals = np.min(trajectories, axis=1)
+        return int((max_vals >= limits[1]).sum()+(min_vals <= limits[0]).sum())
+    
+    def average_excursion_distance(self, k_BT=None):
+        """
+        If a particle leaves the box, find the average distance it travels outside the box.
+
+        Parameters
+        ----------
+        k_BT : TYPE, optional
+            DESCRIPTION. The default is None.
+
+        Returns
+        -------
+        trajectories_leaving_box : TYPE
+            DESCRIPTION.
+
+        """
+        if k_BT is None:
+            k_BT = float(self.temperatures.max())
+        trajectories = self.data.loc[k_BT]
+        outside = (trajectories >= self.potential.x_max) | (trajectories <= self.potential.x_min)
+        mask = np.any(outside, axis=1)
+        trajectories_leaving_box = trajectories[mask]
+        return trajectories_leaving_box
+    
     def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3)):
         """
         Get the distance of the ensemble to equilibrium, defined by eqbm_boltzmann_distro.
@@ -302,7 +283,7 @@ class Ensemble(object):
         bins, heights = self.get_histograms(num_bins=num_bins, regenerate=regenerate) # Generate the variables we need
         if eqbm_boltzmann_distro is None:
             eqbm_boltzmann_distro = self.potential.boltzmann_PMF(bins, k_BT=1)/self.dx # Turn PMF into PDF
-            eqbm_boltzmann_distro = np.repeat(np.reshape(eqbm_boltzmann_distro, (1,*eqbm_boltzmann_distro.shape)), self.num_temperatures, axis=0)
+            eqbm_boltzmann_distro = np.repeat(np.reshape(eqbm_boltzmann_distro, (1,*eqbm_boltzmann_distro.shape)), self.num_temperatures, axis=0) # ASSUMES STRUCTURE OF ENSEMBLE IS (T,n,t)!!!!!
             eqbm_boltzmann_distro = np.reshape(eqbm_boltzmann_distro, (*eqbm_boltzmann_distro.shape, 1))
         distances = distance_function(heights, eqbm_boltzmann_distro, self.dx, axis=1)
         if use_smoothing:
@@ -680,6 +661,7 @@ class Ensemble(object):
         
         fig, ax = plt.subplots()
         bins, all_heights = self.get_histograms(num_bins=num_bins)
+        T_index = list(self.data['T'].to_numpy()).index(T) # Get the index of the desired temperature
         patches = ax.bar(bins, all_heights[0,:,0]/self.N, width=bins[1]-bins[0])
         ax_height = np.max(binned_final_distro + 0.02)
         ax.set_ylim(0,ax_height)
@@ -779,7 +761,7 @@ class Ensemble(object):
         distances_df.to_csv(filename)
         return None
 
-def run_mpemba_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x', 't', 'V', 'state', 'drift', 'x0'], temperatures=[1000,12,1], gut_checks=True, process_data = False, distance_function=distance_functions.L1):
+def run_mpemba_data_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x', 't', 'V', 'state', 'drift', 'x0'], temperatures=[1000,12,1], gut_checks=True, process_data = False, distance_function=distance_functions.L1):
     """
     High-level functions to run all of the basic analysis defined here.
 

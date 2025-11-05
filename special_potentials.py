@@ -32,6 +32,7 @@ class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
         self.x_well = x_well
         self.x_min = x_min
         self.x_max = x_max
+        self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
         self.F_left = F_left
         self.F_right = force_asymmetry*F_left
         super().__init__() # Initialise the parent class *after* useful variables are defined so that it knows what variables to use
@@ -72,8 +73,11 @@ class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
             if not callable(variables[var]):
                 outstring += f"{var} : {variables[var]}\n"
             else:
-                x = sym.symbols("x")
-                outstring += f"{var}({x}) : {variables[var](x)}\n"
+                if var == 'mesh':
+                    outstring += ""
+                else:
+                    x = sym.symbols("x")
+                    outstring += f"{var}({x}) : {variables[var](x)}\n"
         return outstring
     
     def __repr__(self):
@@ -97,6 +101,7 @@ class BumpyAsymmetricDoubleWellPotential(potential_methods.Potential):
         self.x_well = x_well
         self.x_min = x_min
         self.x_max = x_max
+        self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
         self.F_left = F_left
         self.F_right = force_asymmetry*F_left
         self.b = b
@@ -135,7 +140,9 @@ class BumpyAsymmetricDoubleWellPotential(potential_methods.Potential):
             else:
                 x = sym.symbols("x")
                 if var == 'F_0':
-                    outstring += f"F_0 : {-sym.diff(self.U_0(x), x)}"
+                    outstring += f"F_0 : {-sym.diff(self.U_0(x), x)}\n"
+                if var == 'mesh':
+                    outstring += "\n"
                 else:
                     outstring += f"{var}({x}) : {variables[var](x)}\n"
         return outstring
@@ -151,4 +158,28 @@ class BumpyAsymmetricDoubleWellPotential(potential_methods.Potential):
 
         """
         return self.__str__()
-        
+       
+# def polynomial_interpolator_with_derivatives(X, Y, derivatives=None):
+#     if derivatives is None:
+#         derivatives = np.zeros_like(Y)
+#     N = len(X)
+#     assert len(Y) == N
+#     Y_matching_matrix = np.array([X**k for k in range(2*N)]).T
+#     derivative_matching_matrix = np.array([k*X**(k-1) if k > 0 else np.zeros_like(X) for k in range(2*N)]).T
+#     M = np.stack([Y_matching_matrix, derivative_matching_matrix], axis=0)
+#     output_vector = np.stack([Y, derivatives], axis=1)
+#     return output_vector
+
+def optimise_parameters(initial_params, param_constraints, hard_constraints, num_iters = 20):
+    potential = BumpyAsymmetricDoubleWellPotential(**initial_params, **hard_constraints)
+    k_BTs = np.logspace(0,3,50)
+    a_2s = potential.a_k_boltzmannIC(k_BTs, k=2)
+    k_BT_h = k_BTs[a_2s==0][0]
+    for i in range(num_iters):
+        a_2s = potential.a_k_boltzmannIC(k_BTs, k=2)
+        k_BT = k_BTs[a_2s==0]
+        if k_BT:
+            k_BT_h = k_BT
+    
+    
+    
