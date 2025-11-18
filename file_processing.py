@@ -153,7 +153,7 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
     # array = xr.DataArray(data, dims=['T','n','t'], coords={'T':temperatures, 't': np.arange(0,protocol_time,dt)})
     return array
 
-def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t','drift','state','x0','force','T'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
+def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
     """
     Extract file data from new version of protocol that interweaves temperatures.
 
