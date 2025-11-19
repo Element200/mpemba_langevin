@@ -95,7 +95,7 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
 
     chunks = np.array(chunks) # This is always the step that breaks if you have data with uneven column sizes.
     data_cols = list(dataframe.columns)
-    cols_to_extract = {col: data_cols.index(col) for col in data_cols if (not col in ['t','state', 'T'])} # We extract all of the columns except for time and state
+    cols_to_extract = {col: data_cols.index(col) for col in data_cols if (not col in ['t','state', 'T'])} # We extract all of the columns except for time, state, and temperature
     t_index = data_cols.index('t') # Get index of the time column
     T_index = data_cols.index('T') # Get index of temperature column
     
@@ -104,7 +104,7 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
     num_protocols = np.inf
     split_chunks = []
     for T in temp_index:
-        split_chunk = np.where((chunks[...,3]==T)[...,np.newaxis], chunks, np.nan) # [...,np.newaxis] needed so dimensions are comparable
+        split_chunk = np.where((chunks[...,T_index]==T)[...,np.newaxis], chunks, np.nan) # [...,np.newaxis] needed so dimensions are comparable
         mask = ~np.all(np.isnan(split_chunk), axis=tuple(range(1, split_chunk.ndim)))
         # Allows us to mask our data without losing dimensional info
         split_chunks.append(split_chunk[mask])
@@ -141,7 +141,7 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
         raise ValueError("No reference temperature!")
     temperatures = sorted(temperatures, reverse = True) # Sort temperatures in descending order
     chunks = {}
-    n_min = np.inf # Minimum number of particles in an array. Initially set to infinity because that's much higher than any experiment will realistically produce
+    n_min = np.inf # Minimum number of particles in an array. Initially set to infinity because any number is less than infinity.
     for filename in filenames:
         chunks[filename] = chunk_splitter(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state']))
         n = int(chunks[filename]['n'][-1]) # Number of particles in chunks['filename']
@@ -181,7 +181,6 @@ def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t'
     if not 1 in temperatures:
         raise ValueError("No reference temperature!")
     temperatures = sorted(temperatures, reverse = True) # Sort temperatures in descending order
-    chunks = {}
     chunks = chunk_splitter_v2(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']), temperatures=temperatures) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
     return chunks
     # array = xr.DataArray(chunks)
