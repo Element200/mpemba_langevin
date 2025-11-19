@@ -3,7 +3,7 @@
 file_processing.py.
 
 Created on Wed Jun 11 14:46:01 2025
-v1.4
+v1.4.1
 
 @author: sane
 Contains methods to convert file data into an object that the Ensemble class in mpemba.py can operate on.
@@ -111,7 +111,8 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
         if num_protocols > len(split_chunk[mask]):
             num_protocols = len(split_chunk[mask])
     adjusted_chunks = np.array([split_chunks[i][:num_protocols,:] for i,T in enumerate(temp_index)])
-    times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical. This is not strictly true, we're throwing away information about exactly when the state transition happened, but it won't matter later on.
+    times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical.
+    times -= times[0] # Time should start at 0
     return xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
 
 def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','drift','state','x0'], cols_to_extract= ['x'], temperatures = [1000,12,1]):

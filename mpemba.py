@@ -2,7 +2,7 @@
 mpemba.py.
 
 Created super long ago (I forgor)
-v1.4
+v1.5
 
 @author: sane
 Contains high-level functions to perform analysis of Mpemba experiments
@@ -17,6 +17,7 @@ import sympy as sym
 import pandas as pd
 import os
 import numba
+import xarray as xr
 
 directory = os.path.dirname(__file__)
 
@@ -146,7 +147,12 @@ class Ensemble(object):
         self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
         
         return None
-
+    def __add__(self, other):
+        """ensemble_1 + ensemble_2 amounts to simply concatenating the two sets of data."""
+        if self.potential != other.potential:
+            raise TypeError("Ensembles come from different potentials!")
+        new_data = xr.concat([self.data, other.data], dim='n')
+        return Ensemble(new_data, self.potential)
     def get_histograms(self, x_max=None, x_min=None, num_bins=100, regenerate=False):
         """
         Histogram over ensemble number. If self.bins and self.heights are already generated, return them; this will only do work if self.bins and self.heights are None and None.
@@ -627,6 +633,7 @@ class Ensemble(object):
 
         plt.show()
         return bins, [heights_init, heights_mid, heights_end]
+    
     
     def animate(self, T=None, num_bins=30, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100, max_left=-1, max_right=3):
         """

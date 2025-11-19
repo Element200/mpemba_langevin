@@ -3,7 +3,7 @@
 potential_methods.py.
 
 Created on Wed Jun 11 10:22:16 2025
-v1.4
+v1.5
 
 @author: sane
 Creates classes that can be used to add a bunch of handy attributes to various kinds of potentials.
@@ -21,7 +21,20 @@ class Potential(object):
     def __init__(self):
         x = sym.symbols('x') # Define symbols for numeric computation
         self.F_0 = sym.lambdify(x, sym.diff(-self.U_0(x))) # Precompute the derivative and store it as a lambda function. Precomputing is very important for speed.
-        
+    
+    def __eq__(self, other):
+        """Two potentials are 'equal' if all of their initialisation params are the same."""
+        checklist = []
+        for var in self.__dict__:
+            checklist.append(var in other.__dict__)
+        for var in other.__dict__:
+            checklist.append(var in self.__dict__)
+        if ~np.array(checklist).all(): # self and other must all have the same parameters.
+            return False
+        else:
+            checklist = [self.__dict__[var] == other.__dict__[var] for var in self.__dict__]
+            return bool(np.array(checklist).all()) # All parameters should be equal.
+    
     def U(self, x):
         """
         Vectorised potential function, with maximum slope constraints.
