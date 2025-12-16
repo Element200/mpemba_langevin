@@ -80,9 +80,16 @@ def fast_histogram(arr, num_bins, bin_range):
             for val in arr[j,:,i]:
                 if np.isfinite(val): # So that this doesn't fail when given nan values
                     bin_idx = np.int32((val - bin_range[0]) // bin_width) # This will produce weird results if any element is outside bin_range.
+                    if bin_idx == num_bins: bin_idx -= 1 # Fixes weird edge case where val = max(arr) and so bin_idx = num_bins, which will cause an indexing error and make numba crash the kernel
+                    if bin_idx == -1: bin_idx = 0 # The corresponding case for bin_idx < 0 would not throw an error but would still be buggy.
                     hist[j, bin_idx, i] += 1/(n_rows*bin_width) # For PDF
                 else:
                     hist[j, bin_idx, i] = np.nan # If asked to histogram over NaN values, the height of each bin should be NaN.
+    return hist
+
+def slow_histogram(arr, num_bins, bin_range):
+    """Take a 1D histogram over 3D data. Does not use numba because that created some weird issues."""
+    hist = np.apply_along_axis(lambda data: np.histogram(data, bins=np.linspace(*bin_range, num_bins+1), density=True)[0], axis=1, arr=arr)
     return hist
     
 def quench_protocol(k_BT_h, t, tau=1e-5, k_BT_b=1):
@@ -153,7 +160,7 @@ class Ensemble(object):
             raise TypeError("Ensembles come from different potentials!")
         new_data = xr.concat([self.data, other.data], dim='n')
         return Ensemble(new_data, self.potential)
-    def get_histograms(self, x_max=None, x_min=None, num_bins=100, regenerate=False):
+    def get_histograms(self, x_max=None, x_min=None, num_bins=100, regenerate=False, histogram_function=fast_histogram):
         """
         Histogram over ensemble number. If self.bins and self.heights are already generated, return them; this will only do work if self.bins and self.heights are None and None.
 
@@ -167,6 +174,8 @@ class Ensemble(object):
             Number of bins in each histogram. The default is 100.
         regenerate : bool, optional
             Recalculate the number of bins. If set to False and histograms are already generated, it will pull cached bins+histogram
+        histogram_function : function, optional
+            The function to use to calculate the histograms. The default is the numba-optimised fast_histogram
 
         Returns
         -------
@@ -192,8 +201,8 @@ class Ensemble(object):
         self.dx = binned_active_range[1]-binned_active_range[0]
 
         # heights = np.apply_along_axis(lambda data: np.histogram(data, bins=binned_active_range, density=True)[0], axis=1, arr=self.data)
-        heights = fast_histogram(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max])) # Using numba-optimised code speeds things up by 2-3x
-        self.bins, self.heights = binned_active_range[1:]-self.dx/2, heights
+        heights = histogram_function(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max])) # Using numba-optimised code speeds things up by 2-3x
+        self.bins, self.heights = binned_active_range[:-1]+self.dx/2, heights
 
         return binned_active_range[:-1]+self.dx/2, heights # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
     
@@ -531,14 +540,18 @@ class Ensemble(object):
         return np.array([self.data['t'][p_values[i,:]>=threshold][0].to_numpy() for i in range(self.data.shape[0]-1)]) # This list comprehension will run quickly because the number of temperatures is generally small. Exclude the last (cold) temperature because this will trivially be 0.
         
     
-    def plot_distances(self, colors=['r','b','k'], xlim=None, **kwargs_for_distances):
+    def plot_distances(self, colors=['r','b','k'], xlim=None, title=None, other_plt_kwargs={}, **kwargs_for_distances):
         """
         Plot distances.
 
         Parameters
         ----------
-        distance_function : function, optional
-            Distance function to use. The default is distance_functions.L1.
+        colors : list of str, optional
+            Colors for each line in the plot. Default is [red, blue, black].
+        xlim : tuple, optional
+            Set xlimits for the plot, Default is autoscale.
+        title : str, optional
+            Set title for the plot. Default is no title.
 
         Returns
         -------
@@ -549,8 +562,11 @@ class Ensemble(object):
         for i in range(self.num_temperatures):
             distance_data = distances[self.num_temperatures-i-1]
             mask = np.isfinite(distance_data) # To ensure connected lines even when there are nan values in the distances
-            plt.loglog(self.data.t[mask], distance_data[mask], color=colors[self.num_temperatures-i-1])
+            plt.loglog(self.data.t[mask], distance_data[mask], color=colors[self.num_temperatures-i-1], **other_plt_kwargs)
+        plt.xlabel("t")
+        plt.ylabel("Distance")
         plt.xlim(xlim)
+        plt.title(title)
         return None
     
     def plot_sample_trajectories(self, num_trajectories = 4, temp=None):

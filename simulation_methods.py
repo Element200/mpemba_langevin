@@ -130,7 +130,7 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = No
         raise ValueError("At least one reference temperature must exist!")
     active_range = np.linspace(potential.x_min, potential.x_max, num_allowed_initial_positions)
     results = []
-    initial_distro = xr.DataArray(potential.boltzmann_PMF(active_range,k_BTs), coords=(k_BTs, active_range), dims=(['T','x'])) # Slow -- needs fixing
+    initial_distro = xr.DataArray(potential.boltzmann_PMF(active_range,k_BTs).T, coords=(k_BTs, active_range), dims=(['T','x'])) # Slow -- needs fixing
     
     # (len(k_BTs) x num_allowed_initial_positions) array to draw positions from
     times = np.arange(0,expt_length,dt)
@@ -148,10 +148,10 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = No
         if transformed_time:
             t_list.append(quench_protocol.t(times)) # Integrate time to find the transformation
             time_dependent_force = lambda x, t: potential.F(x)/quench_protocol.h_1(t)
-            results.append(langevin_simulation(x, force= time_dependent_force, temperature_function=lambda t: k_BT_b, expt_length=expt_length, gamma=gamma)) # Transform the time using this trick and reset the quench protocol to be D(t) = k_BT_b, the instantaneous quench
+            results.append(langevin_simulation(x, force= time_dependent_force, temperature_function=lambda t: k_BT_b, expt_length=expt_length, gamma=gamma, dt=dt)) # Transform the time using this trick and reset the quench protocol to be D(t) = k_BT_b, the instantaneous quench
         
         else:
-            results.append(langevin_simulation(x, force=lambda x, t: potential.F(x), temperature_function=lambda t: quench_protocol.h(t), expt_length=expt_length, gamma=gamma, k_BT_b=k_BT_b))
+            results.append(langevin_simulation(x, force=lambda x, t: potential.F(x), temperature_function=lambda t: quench_protocol.h(t), expt_length=expt_length, gamma=gamma, k_BT_b=k_BT_b, dt=dt))
     
     if save_memory:
         results = np.array(results, dtype=np.float32) # Change to single-precision floating point to save some memory

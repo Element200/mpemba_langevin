@@ -66,6 +66,8 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
     ----------
     dataframe : pandas.DataFrame
         The raw data with column names set appropriately. This code will fail if certain column names do not exist.
+    temperatures : dict
+        Key-value pairs of temperatures (eg. {0: 1, 1: 12, 2: 1000}). This should match the temperature index assigned by the code to the temperature it is set to.
     state_to_extract : str, optional
         state to extract from the data (duh). The code will throw away the other states to save memory. If state_to_extract represents a state with non fixed-length data, this code will break, so do not set this to 'positioning'.
     state_phase_lag : int, optional
@@ -100,7 +102,7 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
     T_index = data_cols.index('T') # Get index of temperature column
     
     temp_index = list(set(dataframe['T'])) # Get all unique temperature indices
-    temp_dict = {temp: temperatures[i] for i, temp in enumerate(temp_index)}
+    sorted_temperatures = [temperatures[temp] for temp in temp_index]
     num_protocols = np.inf
     split_chunks = []
     for T in temp_index:
@@ -113,7 +115,8 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
     adjusted_chunks = np.array([split_chunks[i][:num_protocols,:] for i,T in enumerate(temp_index)])
     times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical.
     times -= times[0] # Time should start at 0
-    return xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
+    data = xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': sorted_temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
+    return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
 
 def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','drift','state','x0'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
     """
@@ -154,7 +157,7 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
     # array = xr.DataArray(data, dims=['T','n','t'], coords={'T':temperatures, 't': np.arange(0,protocol_time,dt)})
     return array
 
-def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
+def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = {2: 1000,1: 12, 0: 1}, k_BT_b=1):
     """
     Extract file data from new version of protocol that interweaves temperatures.
 
@@ -179,9 +182,9 @@ def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t'
         Array with appropriate dimensions with the same structure as after the simulation, so that further analysis on either data is identical.
     
     """
-    if not 1 in temperatures:
+    if not k_BT_b in temperatures.values():
         raise ValueError("No reference temperature!")
-    temperatures = sorted(temperatures, reverse = True) # Sort temperatures in descending order
+    # temperatures = sorted(temperatures, reverse = True) # Sort temperatures in descending order
     chunks = chunk_splitter_v2(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']), temperatures=temperatures) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
     return chunks
     # array = xr.DataArray(chunks)

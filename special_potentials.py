@@ -73,11 +73,12 @@ class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
             if not callable(variables[var]):
                 outstring += f"{var} : {variables[var]}\n"
             else:
-                if var == 'mesh':
-                    outstring += ""
-                else:
-                    x = sym.symbols("x")
-                    outstring += f"{var}({x}) : {variables[var](x)}\n"
+                outstring += "\n"
+                # if var == 'mesh':
+                #     outstring += "\n"
+                # else:
+                #     x = sym.symbols("x")
+                #     outstring += f"{var}({x}) : {variables[var](x)}\n"
         return outstring
     
     def __repr__(self):
@@ -141,7 +142,7 @@ class BumpyAsymmetricDoubleWellPotential(potential_methods.Potential):
                 x = sym.symbols("x")
                 if var == 'F_0':
                     outstring += f"F_0 : {-sym.diff(self.U_0(x), x)}\n"
-                if var == 'mesh':
+                elif var == 'mesh':
                     outstring += "\n"
                 else:
                     outstring += f"{var}({x}) : {variables[var](x)}\n"
