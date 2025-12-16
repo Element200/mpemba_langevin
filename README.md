@@ -7,6 +7,7 @@ Special libraries: you will need the latest versions (at least as of Dec 2025) o
 2. SymPy (Some methods use analytic derivative computations so that we have more generalisable methods)
 3. Xarray (Pandas on steroids – this allows you to have pandas-like objects in more than two dimensions)
 4. tqdm (for clean progress bars. You don't really need this but I like to have it. If you don't want it, just delete all references to ```tqdm``` in the code)
+
 in addition to other basic libraries like NumPy, Pandas, and so on which you probably already have.
 
 There are two ways to run this code: you either generate data by simulation or you load data from a datafile like that produced by labVIEW code like that in the folder. 
