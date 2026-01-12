@@ -1,3 +1,7 @@
+LabVIEW code was mostly written by Avinash Kumar with some modifications by me for my experiments.
+
+Python code contains methods to integrate the Langevin equation. 
+
 To install this code, download the zip folder, unzip, etc etc. You're very smart, I'm sure you know how to download files.
 
 Use `import mpemba` to import all of the methods you need to run Langevin simulations and such. For solving the FPE, use ```import fokker_planck```. 
