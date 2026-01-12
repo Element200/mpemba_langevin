@@ -22,14 +22,14 @@ Here's some example code to generate a simulation:
 
 ```python
   import mpemba
-  potential = mpemba.special_potentials.AsymmetricDoubleWellPotential(E_b=2, E_tilt=1.3, x_well=0.5) # Other necessary params are defined by default
+  potential = mpemba.special_potentials.AsymmetricDoubleWellPotential(E_barrier=2, E_tilt=1.3, x_well=0.5) # Other necessary params are defined by default
   data = mpemba.simulation_methods.run_mpemba_simulations(k_BTs=[1000,12,1], N=10_000, potential=potential) # Specify initial temperatures and number of particles, plus the potential object
 ```
 
 Here's some example code to load data from a file
 ```python
   import mpemba
-  potential = mpemba.special_potentials.AsymmetricDoubleWellPotential(E_b=2, E_tilt=1.3, x_well=0.5) # Other necessary params are defined by default
+  potential = mpemba.special_potentials.AsymmetricDoubleWellPotential(E_barrier=2, E_tilt=1.3, x_well=0.5) # Other necessary params are defined by default
   data = mpemba.file_processing.extract_file_data_v2(filename="example.txt", protocol_time=7e-2).x # Use mpemba.file_processing.extract_file_data instead of extract_file_data_v2 if the version of "Mpembe_exp_sane" is v6 or lower
   # extract_file_data_v2 returns an xarray.Dataset, not an xarray.DataArray, so you have to explicitly pull out the x data
 ```
