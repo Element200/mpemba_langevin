@@ -43,7 +43,35 @@ def L1(hist_1, hist_2, dx, axis=None):
     assert hist_1.shape[axis]==hist_2.shape[axis], f"Mismatch between hist_1 {np.array(hist_1).shape} and hist_2 {np.array(hist_2).shape}"
     return np.sum(np.abs(hist_2-hist_1), axis=axis)*dx
 
-
+def Lp_constructor(p):
+    """Returns a p-norm."""
+    def Lp(hist_1, hist_2, dx, axis=None):
+        """
+        Find sum |hist_2-hist_1|^p_i. Does NOT calculate the integral; inputs must be converted to PMFs before function is called.
+    
+        Parameters
+        ----------
+        hist_1 : 2D vector of numerics
+            Some probability density vector (this will not fail if hist_1 is not a probability mass but the intended use case is for PMFs).
+        hist_2 : 2D vector of numerics of same shape as hist_1
+            Second probability density vector.
+        dx: float
+            Distance between bins
+        axis : int, optional
+            If hist_1 is multi-dimensional, the axis to sum along. The default is None.
+        p : int, optional
+            The p in the p-norm. The default is 2.
+    
+        Returns
+        -------
+        float
+            sum |hist_2-hist_1|_i. If this is less than zero or greater than two, hist_1 and hist_2 are not correctly normalised.
+    
+        """
+        # hist_1 and hist_2 must be at least two-dimensional arrays
+        assert hist_1.shape[axis]==hist_2.shape[axis], f"Mismatch between hist_1 {np.array(hist_1).shape} and hist_2 {np.array(hist_2).shape}"
+        return dx*(np.sum(np.abs(hist_2-hist_1)**p, axis=axis)**(1/p))
+    return Lp
 
 def kullback_leibler(hist_1, hist_2, dx, axis=None):
     """

@@ -443,7 +443,14 @@ class Potential(object):
         pi_0 = self.boltzmann_PMF(x, k_BT)
         return self.a_k(pi_0, x=x, **kwargs_for_a_k)
     
-    def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, method='a_2', tolerance=1e-3, use_infinite_domain=False, return_max_a = False):
+    def plot_a_2s(self, k_BT_max, n_x=1000, n_T=200):
+        """Plot a_2(T)."""
+        k_BTs = np.logspace(0, np.log(k_BT_max)/np.log(10), n_T)
+        a_2s = self.a_k_boltzmannIC(k_BTs, n_x=n_x)
+        plt.semilogx(k_BTs, a_2s)
+        return None
+    
+    def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, method='a_2', tolerance=1e-3, use_infinite_domain=False, return_max_a = False, k_BT_min=1, n_x=500):
         """
         Check if a fast Mpemba effect exists and if so, find the temperature at which it occurs.
 
@@ -461,10 +468,10 @@ class Potential(object):
         Temperature at which Mpemba effect occurs, if any.
 
         """
-        k_BTs = np.logspace(0, np.log(k_BT_max)/np.log(10), n_T)        
-        
+        k_BTs = np.logspace(np.log(k_BT_min)/np.log(10), np.log(k_BT_max)/np.log(10), n_T)        
+        k_BTs[0] = 1 # Jugaad hotfix
         if method == 'a_2':
-            a_2s = self.a_k_boltzmannIC(k_BTs, n_x=500)
+            a_2s = self.a_k_boltzmannIC(k_BTs, n_x=n_x)
             arr = a_2s
         elif method == 'P':
             right_probability_ratios = self.right_half_probability_ratio(k_BTs, use_infinite_domain=use_infinite_domain)
@@ -483,7 +490,52 @@ class Potential(object):
         else:
             print("No strong Mpemba effect detected.")
             return None
-            
+        
+    def infer_worst_temperature(self, k_BT_max, n_T = 100, tolerance=1e-3, use_infinite_domain=False, return_max_a = False, k_BT_min=1, n_x=500):
+        """
+        Find the value of T for which d/dT (a_2(T)) = 0 (this will be the 'warm' temperature to select).
+
+        Parameters
+        ----------
+        k_BT_max : numeric
+            Highest temperature to check.
+        n_T : int
+            Number of temperatures.
+        method : str ('a_2' or 'P')
+            Which method to use to determine whether a fast Mpemba effect occurs.
+
+        Returns
+        -------
+        Temperature at which Mpemba effect occurs, if any.
+
+        """
+        k_BTs = np.logspace(np.log(k_BT_min)/np.log(10), np.log(k_BT_max)/np.log(10), n_T)        
+        k_BTs[0] = 1
+        a_2s = self.a_k_boltzmannIC(k_BTs, n_x=n_x)
+        arr = np.gradient(a_2s)
+        
+        closeToTarget = np.isclose(arr[1:], np.zeros_like(arr[1:]), atol=tolerance)
+        slopeChangeOccurs = closeToTarget.any() # 
+        # Exclude arr[0] because that will trivially always be True.
+        if slopeChangeOccurs:
+            print("Local maximum exists!")
+            if return_max_a:
+                lowest_a_2 = k_BTs[1:][closeToTarget][0]
+                k_BTs[1:][closeToTarget], k_BTs[(arr==arr[arr<lowest_a_2].max())]
+            return k_BTs[1:][closeToTarget]
+        else:
+            print("No strong Mpemba effect detected.")
+            return None
+        
+    def stronger_mpemba_condition(self, D, k_BT_max, n_T=200, n_x=500):
+        """Use my janky-ass strong condition to infer the Mpemba effect if lambda_3 is very low."""
+        k_BTs = np.logspace(0, np.log(k_BT_max)/np.log(10), n_T)
+        lambda_2, u_2, v_2 = self.eigs_k(D, k=2)
+        lambda_3, u_3, v_3 = self.eigs_k(D, k=3)
+        Delta_lambda = lambda_3 - lambda_2
+        V_2, V_3 = v_2.sum(), v_3.sum() # Equivalent to integrating v_2 and v_3. Scale factors or dx-es won't matter because we're dividing V_3 by V_2.
+        a_2, a_3 = self.a_k_boltzmannIC(k_BTs, n_x=n_x, k=2), self.a_k_boltzmannIC(k_BTs, n_x=n_x, k=3)
+        return -np.log(-V_3*a_3/(V_2*a_2))/Delta_lambda
         
 
 class UnboundedForcePotential(Potential):

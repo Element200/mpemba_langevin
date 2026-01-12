@@ -14,6 +14,7 @@ from tqdm import tqdm
 import scipy
 import mpemba
 import numba
+import matplotlib.pyplot as plt
 
 @numba.njit
 def RK4_step(W, p, dt):
@@ -31,8 +32,15 @@ def euler_step(W, p, dt):
 
 D = 150
 
-potential = mpemba.special_potentials.BumpyAsymmetricDoubleWellPotential(x_max=10,x_min=-10, E_barrier=2, E_tilt=0.5, force_asymmetry = 0.4, b=-0.0, n=3)
+# potential = mpemba.special_potentials.BumpyAsymmetricDoubleWellPotential(x_max=5,x_min=-5, E_barrier=3, E_tilt=0.5, force_asymmetry = 0.4, b=-0.05, n=1)
+potential = mpemba.special_potentials.BumpyAsymmetricDoubleWellPotential(x_max=5,x_min=-5, E_barrier=2, E_tilt=1, force_asymmetry = 0.2, b=0, n=1, x_s=0.1)
+# bumpy = mpemba.special_potentials.BumpyAsymmetricDoubleWellPotential(x_max=7,x_min=-5, E_barrier=3, E_tilt=0.7, force_asymmetry = 0.2, b=-0.05, n=1)
 bumpy = mpemba.special_potentials.BumpyAsymmetricDoubleWellPotential(x_max=5,x_min=-5, E_barrier=2, E_tilt=0.5, force_asymmetry = 0.4, b=-0.0, n=1)
+
+# k_BTs = np.logspace(0, np.log(15)/np.log(10), 200)
+# a_2s = potential.a_k_boltzmannIC(k_BTs, n_x=1000)
+# bumpy_a_2s = bumpy.a_k_boltzmannIC(k_BTs, n_x=1000)
+# plt.semilogx(k_BTs, np.abs(np.array([a_2s, bumpy_a_2s]).T))
 
 
 @numba.njit
@@ -49,7 +57,7 @@ def fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_toleranc
             saved[..., i//saving_timestep] = p.copy()
             Z = p.sum() * dx
             if not np.isclose(Z, 1.0, atol=error_tolerance): # We check that Z ~= 1 every so often so that we can check that our integration hasn't screwed up and kill the loop if it has.
-                raise ValueError(f"Integration failure! Z={Z}")
+                raise ValueError("Integration failure! Z=", Z, i)
     return saved
 
 
@@ -167,3 +175,4 @@ def analytical_distances_to_boltzmann(p_trajectories, potential, distance_functi
     pi = potential.boltzmann(x, k_BT_b)
     pi_structured = np.repeat(np.reshape(pi, (1,*pi.shape, 1)), p_trajectories.shape[0], axis=0)
     return distance_function(p_trajectories, pi_structured, dx=dx, axis=axis)
+

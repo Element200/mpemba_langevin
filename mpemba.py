@@ -274,20 +274,49 @@ class Ensemble(object):
         trajectories_leaving_box = trajectories[mask]
         return trajectories_leaving_box
     
-    def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3)):
+    def infer_steady_state(self, num_bins, bin_range, start_time=0, k_BT_b=1):
+        """
+        Gets a steady state Boltzmann distribution
+
+        Parameters
+        ----------
+        num_bins : int
+            Number of bins for fast_histogram.
+        bin_range : array of size 2
+            lowest bin number and highest bin number.
+        start_time : TYPE, optional
+            DESCRIPTION. The default is 0.
+        k_BT_b : TYPE, optional
+            DESCRIPTION. The default is 1.
+
+        Returns
+        -------
+        cold_histogram : TYPE
+            DESCRIPTION.
+
+        """
+        cold_data = self.data.loc[k_BT_b, :, start_time:].to_numpy().flatten()
+        cold_histogram, _ = np.histogram(cold_data, bins=num_bins, range=bin_range, density=True)
+        return np.array(cold_histogram)
+    
+    def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3), use_true_distro=False, k_BT_b=1, **kwargs_for_steady_state_inference):
         """
         Get the distance of the ensemble to equilibrium, defined by eqbm_boltzmann_distro.
 
         Parameters
         ----------
         eqbm_boltzmann_distro : 1D array, size = len(self.bins), optional
-            PMF (*not* PDF) of the Boltzmann distribution at the cold temperature. The size of the number of bins, otherwise taking the distance WILL fail. The default is the *analytic* boltzmann array for the temperature corresponding to the lowest temperature. 
+            PMF (*not* PDF) of the Boltzmann distribution at the cold temperature. size = number of bins, otherwise taking the distance WILL fail. The default is the *inferred* boltzmann array for the temperature corresponding to the lowest temperature. 
         distance_function: function, optional
             The distance function to use. This must take in three arguments and an optional argument called 'axis'. The default is L1.
         use_smoothing : bool, optional
             Smooth the distances using a convolution. The default is False.
         kernel : vector of numerics, optional
             Convolution kernel to use if smoothing is enabled. The default is [1,1,1] for numerical averaging.
+        use_true_distro : bool, optional
+            Take distance with respect to the *theoretical* Boltzmann distro instead of inferring it from the data. The default is False.
+        k_BT_b : numeric, optional
+            Bath temperature. The default is 1
 
         Returns
         -------
@@ -297,7 +326,10 @@ class Ensemble(object):
         """
         bins, heights = self.get_histograms(num_bins=num_bins, regenerate=regenerate) # Generate the variables we need
         if eqbm_boltzmann_distro is None:
-            eqbm_boltzmann_distro = self.potential.boltzmann_PMF(bins, k_BT=1)/self.dx # Turn PMF into PDF
+            if use_true_distro:
+                eqbm_boltzmann_distro = self.potential.boltzmann_PMF(bins, k_BT=k_BT_b)/self.dx # Turn PMF into PDF
+            else:
+                eqbm_boltzmann_distro = self.infer_steady_state(len(bins), np.array([self.global_min, self.global_max]), **kwargs_for_steady_state_inference)
             eqbm_boltzmann_distro = np.repeat(np.reshape(eqbm_boltzmann_distro, (1,*eqbm_boltzmann_distro.shape)), self.num_temperatures, axis=0) # ASSUMES STRUCTURE OF ENSEMBLE IS (T,n,t)!!!!!
             eqbm_boltzmann_distro = np.reshape(eqbm_boltzmann_distro, (*eqbm_boltzmann_distro.shape, 1))
         distances = distance_function(heights, eqbm_boltzmann_distro, self.dx, axis=1)
@@ -311,6 +343,8 @@ class Ensemble(object):
             return convolved_distances
         
         return distances
+    
+    
     
     def get_noise_floor(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, final_averaging_window=1000):
         """

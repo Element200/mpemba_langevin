@@ -109,7 +109,7 @@ class BumpyAsymmetricDoubleWellPotential(potential_methods.Potential):
         self.n = n
         self.x_s = x_s
         self.a = self.F_left/((2*n+1)*x_s**(2*n) + b)
-        self.unbumpy = AsymmetricDoubleWellPotential(E_barrier=E_barrier, E_tilt=E_tilt, x_well=x_well, x_min=x_min, x_max=x_max, F_left=F_left, force_asymmetry=1)
+        self.unbumpy = AsymmetricDoubleWellPotential(E_barrier=E_barrier, E_tilt=E_tilt, x_well=x_well, x_min=x_min, x_max=x_max, F_left=F_left, force_asymmetry=1) # This is where the "inheritance" comes from
         self.x_l = self.unbumpy.x_l
         self.x_r = self.unbumpy.x_r
         self.x_d = ((self.F_right/self.a - b)/(2*n+1))**(0.5/n) # Godawful analytic solution for where the 'bumpy' potential has slope F_right
@@ -149,17 +149,152 @@ class BumpyAsymmetricDoubleWellPotential(potential_methods.Potential):
         return outstring
     
     def __repr__(self):
+        """Do the same schtick as __str__ but now we don't have to make a print call."""
+        return self.__str__()
+    
+        
+
+class AsymmetricTripleWellPotential(potential_methods.BoundedForcePotential):
+    """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Inheriting from BoundedForcePotential will add all other necessary methods."""
+    
+    def __init__(self, E_barrier=10, E_rise=0.8, E_tilt=1, x_well=0.5, x_min=-5, x_max=5, F_left=50, force_asymmetry=1):
+        """Define parameters used in the potential."""
+        self.E_barrier = E_barrier
+        self.E_tilt = E_tilt
+        self.E_rise = E_rise
+        self.x_well = x_well
+        self.x_min = x_min
+        self.x_max = x_max
+        self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
+        self.F_left = F_left
+        self.F_right = force_asymmetry*F_left
+        super().__init__() # Initialise the parent class *after* useful variables are defined so that it knows what variables to use
+        return None
+    
+    def U_0(self, x, t=None):
+        """
+        Generate basic potential (without bounded derivatives) evaluated at x.
+
+        Parameters
+        ----------
+        x : numeric or vector of numerics
+            Position(s).
+        t : numeric
+            Time to evaluate potential at
+
+        Returns
+        -------
+        Numeric or vector of numerics
+            Potential evaluated at x at time t. For now this is time-independent.
+
+        """
+        return self.E_barrier*(1-2*(x/self.x_well)**2 + (x/self.x_well)**4)*(x/self.x_well)**2 - self.E_rise*(x/self.x_well)**2/2 +self.E_tilt*(x/self.x_well)/2
+    
+    def __str__(self):
+        """
+        Print all the variables we use in the potential.
+
+        Returns
+        -------
+        outstring : str
+            String representation of AsymmetricDoubleWellPotential.
+
+        """
+        variables = self.__dict__
+        outstring = "TRIPLE-WELLED QUARTIC POTENTIAL WITH FINITE MAXIMUM SLOPES\n"
+        for var in variables:
+            if not callable(variables[var]):
+                outstring += f"{var} : {variables[var]}\n"
+            else:
+                outstring += "\n"
+                # if var == 'mesh':
+                #     outstring += "\n"
+                # else:
+                #     x = sym.symbols("x")
+                #     outstring += f"{var}({x}) : {variables[var](x)}\n"
+        return outstring
+    
+    def __repr__(self):
         """
         Do the same schtick as __str__ but now we don't have to make a print call.
 
         Returns
         -------
         outstring : str
-            String representation of BumpyAsymmetricDoubleWellPotential.
+            String representation of AsymmetricDoubleWellPotential.
 
         """
         return self.__str__()
-       
+    
+class SimpleQuartic(potential_methods.BoundedForcePotential):
+    """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Inheriting from BoundedForcePotential will add all other necessary methods."""
+    
+    def __init__(self, E_barrier=10, x_min=-5, x_max=5, F_left=50, force_asymmetry=1):
+        """Define parameters used in the potential."""
+        self.E_barrier = E_barrier
+        self.x_min = x_min
+        self.x_max = x_max
+        self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
+        self.F_left = F_left
+        self.F_right = force_asymmetry*F_left
+        super().__init__() # Initialise the parent class *after* useful variables are defined so that it knows what variables to use
+        return None
+    
+    def U_0(self, x, t=None):
+        """
+        Generate basic potential (without bounded derivatives) evaluated at x.
+
+        Parameters
+        ----------
+        x : numeric or vector of numerics
+            Position(s).
+        t : numeric
+            Time to evaluate potential at
+
+        Returns
+        -------
+        Numeric or vector of numerics
+            Potential evaluated at x at time t. For now this is time-independent.
+
+        """
+        return self.E_barrier*x**4
+    
+    def __str__(self):
+        """
+        Print all the variables we use in the potential.
+
+        Returns
+        -------
+        outstring : str
+            String representation of AsymmetricDoubleWellPotential.
+
+        """
+        variables = self.__dict__
+        outstring = "SIMPLE QUARTIC POTENTIAL WITH FINITE MAXIMUM SLOPES\n"
+        for var in variables:
+            if not callable(variables[var]):
+                outstring += f"{var} : {variables[var]}\n"
+            else:
+                outstring += "\n"
+                # if var == 'mesh':
+                #     outstring += "\n"
+                # else:
+                #     x = sym.symbols("x")
+                #     outstring += f"{var}({x}) : {variables[var](x)}\n"
+        return outstring
+    
+    def __repr__(self):
+        """
+        Do the same schtick as __str__ but now we don't have to make a print call.
+
+        Returns
+        -------
+        outstring : str
+            String representation of AsymmetricDoubleWellPotential.
+
+        """
+        return self.__str__()
+
 # def polynomial_interpolator_with_derivatives(X, Y, derivatives=None):
 #     if derivatives is None:
 #         derivatives = np.zeros_like(Y)

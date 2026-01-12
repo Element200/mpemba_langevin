@@ -160,6 +160,7 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
 def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = {2: 1000,1: 12, 0: 1}, k_BT_b=1):
     """
     Extract file data from new version of protocol that interweaves temperatures.
+    This function is kind of redundant. You can mostly just directly use chunk_splitter_v2. 
 
     Parameters
     ----------
@@ -187,11 +188,51 @@ def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t'
     # temperatures = sorted(temperatures, reverse = True) # Sort temperatures in descending order
     chunks = chunk_splitter_v2(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']), temperatures=temperatures) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
     return chunks
-    # array = xr.DataArray(chunks)
-    # for var in chunks[filenames[0]].data_vars:
-    #     array.append(xr.concat([chunks[filename][var].loc[:n_min,...].assign_coords(t=np.arange(0,protocol_time,dt)) for filename in filenames], pd.Index(temperatures, name='T')))
-    # array = xr.DataArray(data, dims=['T','n','t'], coords={'T':temperatures, 't': np.arange(0,protocol_time,dt)})
-    # return array
+
+def get_drifts(filename, protocol_time, calibration_time, velocity=True, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], temperatures = {2: 1000,1: 12, 0: 1}, k_BT_b=1, approximate_positioning_time=1e-3):
+    """
+    Calculates the drifts (or drift velocity)
+
+    Parameters
+    ----------
+    filename : string
+        Filename (with directory, if not in the CWD).
+    protocol_time : numeric
+        Length of the protocol.
+    calibration_time : numeric
+        Length of the calibration.
+    velocity : bool, optional
+        Whether to return the velocity or the drift values. The default is True.
+    column_names : list of str, optional
+        Column names to pass to chunk_splitter. The default is ['x','t','drift','state','force','x0','T'].
+    temperatures : dict of int-numeric pairs, optional
+        Dict matching temperature keys to temperature values. The default is {2: 1000,1: 12, 0: 1}.
+    k_BT_b : Numeric, optional
+        Bath temperature (everything else is scaled by this). The default is 1.
+    approximate_positioning_time : numeric, optional
+        The approximate amount of time it would take to position a particle. The default is 1e-3.
+
+    Raises
+    ------
+    ValueError
+        If k_BT_b is not one of the temperatures.
+
+    Returns
+    -------
+    ndarray of numeric
+        The drift velocity, or the drifts at each point in time.
+
+    """
+    if not k_BT_b in temperatures.values():
+        raise ValueError("No reference temperature!")
+    chunks = chunk_splitter_v2(pd.read_table(filename, names=column_names, usecols=['drift','t','state','T']), temperatures=temperatures, state_to_extract='calibration')
+    drift_array = chunks.drift.loc[...,-1].to_numpy() # 'calibration' state computes a running average, so the last member of each chunk will be the total drift in the protocol since triangle-wave calibration.
+    drift_vals = drift_array.flatten() # We don't need temperature information.
+    if velocity:
+        total_protocol_time = calibration_time + protocol_time + approximate_positioning_time
+        return np.gradient(drift_vals, np.arange(drift_vals.size)*total_protocol_time)
+    return drift_vals
+    
 
 def load_brownian_data(filenames, column_names=['x','t','drift','state','F','x0','T'], cols_to_extract=['x']):
     """
@@ -319,7 +360,7 @@ def equipartition(x):
     return 1/sigma_x**2 # Assumes no measurement noise
 
 
-def load_processed_data(filenames, temperatures=[1000,12,1]):
+def load_processed_data(filenames, temperatures={0: 1000,1: 12,2: 1}):
     """
     Load trajectory data that has already been processed to remove the junk. Can also load processed simulation data. Do not use this to import raw data. All of the time columns must be the same and the file format must be a csv with the first row corresponding to the ensemble index and the first column corresponding to the time.
 
@@ -338,7 +379,10 @@ def load_processed_data(filenames, temperatures=[1000,12,1]):
     """
     assert len(filenames) == len(temperatures), "Mismatch between number of files and number of temperatures!"
     data = []
+    temp_index = list(range(len(temperatures))) # Get all unique temperature indices
+    sorted_temperatures = [temperatures[temp] for temp in temp_index]
     for i in tqdm(range(len(filenames))):
         data.append(pd.read_csv(filenames[i], header = 0, index_col=0).T)
     t = data[-1].columns # Assumes the time columns are all the same
-    return xr.DataArray(data, dims=('T', 'n', 't'), coords = {'T': temperatures, 't':t})
+    da = xr.DataArray(data, dims=('T', 'n', 't'), coords = {'T': sorted_temperatures, 't':t})
+    return da.sortby('T', ascending=False)
