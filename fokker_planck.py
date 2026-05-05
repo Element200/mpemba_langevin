@@ -12,10 +12,21 @@ Analytic methods to solve the FPE (surprisingly I couldn't find any good librari
 import numpy as np
 from tqdm import tqdm
 import scipy
-import mpemba
 import numba
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+import os
+
+directory = os.path.dirname(__file__)
+
+import sys
+sys.path.append(directory)
+# This assumes that all of the mpemba files are in the same directory
+try:
+    import mpemba
+except ImportError:
+    print("Something went wrong when importing dependencies! Make sure local imports are in the same directory as this file")
+    raise ImportError
 
 @numba.njit
 def RK4_step(W, p, dt):
@@ -54,7 +65,10 @@ def fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_toleranc
     t_vals = np.linspace(0, steps*dt, steps)
     h_vals = h(t_vals) # Precompute outside the hot loop for speed
     for i in range(steps):
+        p_prev = np.copy(p)
         p = integrator(W*h_vals[i], p, dt) # euler is faster than RK4 and the accuracy difference is not that big
+        if np.isnan(p).any():
+            raise ValueError("Probability vector contains NaNs", i, np.isnan(p).sum(), p_prev)
         if (i % saving_timestep == 0):
             saved[..., i//saving_timestep] = p.copy()
             Z = p.sum() * dx
@@ -64,7 +78,7 @@ def fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_toleranc
 
 
 
-def fokker_planck_solver(p_0, potential, D, t_max, dt=1e-6, h=lambda t: 1, saving_timestep=1000, error_tolerance=1e-3):
+def fokker_planck_solver(p_0, potential, D, t_max, dt=1e-6, h=lambda t: 1, saving_timestep=1000, error_tolerance=1e-3, integrator=euler_step):
     """
     Solve the FPE for time-independent potential U(x) = potential.U(x) and diffusivity D. You can also specify a diffusivity protocol.
 
@@ -103,10 +117,10 @@ def fokker_planck_solver(p_0, potential, D, t_max, dt=1e-6, h=lambda t: 1, savin
     x = np.linspace(potential.x_min, potential.x_max, len(p_0))
     S = potential.grima_newman_discretisation(x=x)
     steps = int(t_max//dt)
-    out = fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_tolerance=error_tolerance)
+    out = fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_tolerance=error_tolerance, integrator=integrator)
     return np.array(out)
 
-def analytic_solution(k_BTs, potential, D, n_x = 500, t_max = 0.1, dt=1e-6, resolution = 1e-5, error_tolerance=1e-3):
+def analytic_solution(k_BTs, potential, D, n_x = 500, t_max = 0.1, dt=1e-6, resolution = 1e-5, error_tolerance=1e-3, integrator=euler_step):
     """
     Analytically solves the FPE given p(x,0) is a boltzmann distro with temperatures in k_BTs.
 
@@ -139,7 +153,7 @@ def analytic_solution(k_BTs, potential, D, n_x = 500, t_max = 0.1, dt=1e-6, reso
     x = np.linspace(potential.x_min, potential.x_max, n_x)
     for k_BT in tqdm(k_BTs):
         p_0 = potential.boltzmann(x, k_BT)
-        p_outs.append(fokker_planck_solver(p_0, potential, D, t_max=t_max, dt=dt, saving_timestep=int(resolution//dt), error_tolerance=error_tolerance))
+        p_outs.append(fokker_planck_solver(p_0, potential, D, t_max=t_max, dt=dt, saving_timestep=int(resolution//dt), error_tolerance=error_tolerance, integrator=integrator))
     return np.array(p_outs)
 
 def quasistatic_limit(potential, h, times, k_BT_b=1, n_x=500):
@@ -220,7 +234,7 @@ def animate_pdfs(x, pdfs, interval=200, repeat=False):
     def update(frame):
         y = pdfs[frame]
         line.set_data(x, y)
-        ax.set_title(f"PDF Evolution (Frame {frame+1}/{len(pdfs)})")
+        ax.set_title(f"Frame {frame+1}/{len(pdfs)}")
         return line,
 
     anim = FuncAnimation(
@@ -229,16 +243,16 @@ def animate_pdfs(x, pdfs, interval=200, repeat=False):
         frames=len(pdfs),
         init_func=init,
         interval=interval,
-        blit=True,
+        blit=False,
         repeat=repeat
     )
 
     plt.show()
     return anim
 
-def animate_pdfs(x, pdfs, interval=200, repeat=False, dt=1e-5, frame_decay_const=100):
+def animate_pdfs_(x, pdfs, interval=200, repeat=False, dt=1e-5, frame_decay_const=100):
     """
-    Animate an array of probability density functions
+    Animate an array of probability density functions.
     using logarithmic time mapping.
 
     Early PDFs evolve slowly; later ones evolve faster.

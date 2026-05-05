@@ -70,7 +70,7 @@ class Potential(object):
 
         """
         return self.F_0(x)
-    def plot_potential(self, plot_range=None):
+    def plot_potential(self, plot_range=None, color='g'):
         """
         Plot the potential.
 
@@ -86,9 +86,9 @@ class Potential(object):
         """
         if plot_range is None:
             plot_range = np.linspace(self.x_min, self.x_max, 50)
-        plt.plot(plot_range, self.U(plot_range), 'g')
+        plt.plot(plot_range, self.U(plot_range), color)
         return None
-    def plot_force(self, plot_range=None):
+    def plot_force(self, plot_range=None, color='c'):
         """
         Plot the force.
 
@@ -104,7 +104,7 @@ class Potential(object):
         """
         if plot_range is None:
             plot_range = np.linspace(self.x_min, self.x_max, 50)
-        plt.plot(plot_range, self.F(plot_range), 'c')
+        plt.plot(plot_range, self.F(plot_range), color)
         return None
     def _boltzmann_unnormalised(self, x, k_BT):
         # unnormalised, unvectorised boltzmann distro at time zero
@@ -418,7 +418,7 @@ class Potential(object):
         assert len(x) == len(p_0), f"Size mismatch between x ({x.shape}) and p_0 ({p_0.shape})."
         eigenval_k, left_eigenvec_k, right_eigenvec_k = self.eigs_k(D=1,k=k, x=x, imaginary_tolerance=imaginary_tolerance) # eigenval_k doesn't matter, so D doesn't matter either.
         
-        return (left_eigenvec_k @ p_0)/(left_eigenvec_k @ right_eigenvec_k) # Numerical integration, computes [<u_k|p_0>/<u_k|v_k>    
+        return (left_eigenvec_k @ p_0)/(left_eigenvec_k @ right_eigenvec_k) # Numerical integration, computes <u_k,p_0>/<u_k,v_k>
 
     def a_k_boltzmannIC(self, k_BT, x=None, n_x=100, **kwargs_for_a_k):
         """
@@ -527,15 +527,15 @@ class Potential(object):
             print("No strong Mpemba effect detected.")
             return None
         
-    def stronger_mpemba_condition(self, k_BT_h, k_BT_w, D, n_x=500):
-        """Use my janky-ass strong condition to infer the Mpemba effect if lambda_3 is very low, with the helpful L1 distance. Returns the predicted time of crossing."""
-        lambda_2, u_2, v_2 = self.eigs_k(D, k=2)
-        lambda_3, u_3, v_3 = self.eigs_k(D, k=3)
-        Delta_lambda = np.abs(lambda_3) - np.abs(lambda_2)
-        V_2, V_3 = np.abs(v_2).sum(), np.abs(v_3).sum() # Equivalent to integrating v_2 and v_3. Scale factors or dx-es won't matter because we're dividing V_3 by V_2.
-        a_2_w, a_3_w = self.a_k_boltzmannIC(k_BT_w, n_x=n_x, k=2), self.a_k_boltzmannIC(k_BT_w, n_x=n_x, k=3)
-        a_3_h = self.a_k_boltzmannIC(k_BT_h, n_x=n_x, k=3)
-        return np.log(V_3*(a_3_h-a_3_w)/(V_2*a_2_w))/Delta_lambda
+    # def stronger_mpemba_condition(self, k_BT_h, k_BT_w, D, n_x=500):
+    #     """Use my janky-ass strong condition to infer the Mpemba effect if lambda_3 is very low, with the helpful L1 distance. Returns the predicted time of crossing."""
+    #     lambda_2, u_2, v_2 = self.eigs_k(D, k=2)
+    #     lambda_3, u_3, v_3 = self.eigs_k(D, k=3)
+    #     Delta_lambda = np.abs(lambda_3) - np.abs(lambda_2)
+    #     V_2, V_3 = np.abs(v_2).sum(), np.abs(v_3).sum() # Equivalent to integrating v_2 and v_3. Scale factors or dx-es won't matter because we're dividing V_3 by V_2.
+    #     a_2_w, a_3_w = self.a_k_boltzmannIC(k_BT_w, n_x=n_x, k=2), self.a_k_boltzmannIC(k_BT_w, n_x=n_x, k=3)
+    #     a_3_h = self.a_k_boltzmannIC(k_BT_h, n_x=n_x, k=3)
+    #     return np.log(V_3*(a_3_h-a_3_w)/(V_2*a_2_w))/Delta_lambda
         
 
 class UnboundedForcePotential(Potential):
@@ -545,9 +545,10 @@ class UnboundedForcePotential(Potential):
         super().__init__()
         x = sym.symbols('x') # Define symbols for numeric computation
         self.F_0 = sym.lambdify(x, sym.diff(-self.U_0(x))) # Precompute the derivative and store it as a lambda function. Precomputing is very important for speed.
+        self.U_numpy = sym.lambdify(x, self.U_0(x))
     def U(self, x):
         """Return U_0(x)."""
-        return self.U_0(x)
+        return self.U_numpy(x)
     def F(self, x):
         """Return F_0(x)."""
         return self.F_0(x)

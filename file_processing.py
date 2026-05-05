@@ -191,7 +191,7 @@ def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t'
 
 def get_drifts(filename, protocol_time, calibration_time, velocity=True, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], temperatures = {2: 1000,1: 12, 0: 1}, k_BT_b=1, approximate_positioning_time=1e-3):
     """
-    Calculates the drifts (or drift velocity)
+    Calculate the drifts (or drift velocity).
 
     Parameters
     ----------
@@ -225,8 +225,8 @@ def get_drifts(filename, protocol_time, calibration_time, velocity=True, dt=1e-5
     """
     if not k_BT_b in temperatures.values():
         raise ValueError("No reference temperature!")
-    chunks = chunk_splitter_v2(pd.read_table(filename, names=column_names, usecols=['drift','t','state','T']), temperatures=temperatures, state_to_extract='calibration')
-    drift_array = chunks.drift.loc[...,-1].to_numpy() # 'calibration' state computes a running average, so the last member of each chunk will be the total drift in the protocol since triangle-wave calibration.
+    chunks = chunk_splitter_v2(pd.read_table(filename, names=column_names, usecols=['drift','t','state','T']), temperatures=temperatures, state_to_extract='protocol')
+    drift_array = chunks.drift[...,0].to_numpy() # There's no running average in 'protocol' state, so we might as well just take the first term
     drift_vals = drift_array.flatten() # We don't need temperature information.
     if velocity:
         total_protocol_time = calibration_time + protocol_time + approximate_positioning_time

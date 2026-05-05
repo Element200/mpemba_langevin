@@ -9,6 +9,8 @@ v1.0
 Special potentials that we're interested in -- Asymmetric Double-well potentials, bounded potentials, all that jazz.
 """
 import numpy as np
+import scipy
+import matplotlib.pyplot as plt
 
 import sys
 import os
@@ -226,8 +228,68 @@ class AsymmetricTripleWellPotential(potential_methods.BoundedForcePotential):
         """
         return self.__str__()
     
+class AnalyticAsymmetricDoubleWellPotential(potential_methods.UnboundedForcePotential):
+    def __init__(self, E_barrier=2, E_tilt=1.3, F_left=50, x_well=0.5, x_min=-10, x_max=10, force_asymmetry = 1, n=1, n2=1, optimise=True, x_0=1, x_1=0, x_l=-1, x_r=1):
+        self.E_barrier = E_barrier
+        self.x_well = x_well
+        self.E_tilt = E_tilt
+        self.F_left = F_left
+        self.F_right = force_asymmetry*F_left
+        self.force_asymmetry = force_asymmetry
+        self.x_min=x_min
+        self.x_max=x_max
+        self.n = n
+        comparisonPotential = AsymmetricDoubleWellPotential(E_barrier=self.E_barrier, E_tilt=self.E_tilt, F_left=self.F_left, force_asymmetry=self.force_asymmetry, x_min=self.x_min, x_max=self.x_max)
+        self.comparisonPotential = comparisonPotential
+        
+        y = sym.symbols('y')
+        k = sym.symbols('k')
+        X_1 = sym.symbols('x_1')
+        X_l = sym.symbols('x_l')
+        X_r = sym.symbols('x_r')
+        unboundedPotential = lambda y: self.E_barrier*(1-(y/self.x_well)**2)**2 - 0.5*self.E_tilt*y/self.x_well
+        # 
+        rect_n = lambda y, k, x_1: sym.exp(-((y-x_1)/k)**(2*n2))
+        rect_n_lambda = sym.lambdify([y, k, X_1], rect_n(y, k, X_1))
+        unboundedForce = sym.lambdify(y, sym.diff(-unboundedPotential(y), y))
+        rect_n_diff = sym.lambdify([y, k, X_1], sym.diff(-rect_n(y, k, X_1), y))
+        force_func = lambda x, k, x_1: unboundedForce(x)*rect_n_lambda(x, k, x_1)+unboundedPotential(x)*rect_n_diff(x, k, x_1)
+        const_slope_left = lambda x, x_l: sym.log(1+sym.exp(-n*self.F_left*(x-x_l)))/n
+        const_slope_right = lambda x, x_r: sym.log(1+sym.exp(n*self.F_right*(x-x_r)))/n
+        bounds_func = lambda x, x_l, x_r, k, x_1: (const_slope_left(x, x_l)+const_slope_right(x, x_r))*(1-rect_n(x, k, x_1))
+        bounds_func_diff = sym.lambdify([y, X_l, X_r, k, X_1], sym.diff(-bounds_func(y, X_l, X_r, k, X_1), y))
+        # const_slope_right = lambda x, x_r: np.log(1+np.exp(n*self.F_right*(x-x_r)))/n
+        if optimise:
+            x = np.linspace(-3, 3, 10000)
+            optimising_func = lambda x, k, x_1, x_l, x_r: force_func(x, k, x_1)+bounds_func_diff(x, x_l, x_r, k, x_1)
+            
+            popt, pcov = scipy.optimize.curve_fit(optimising_func, xdata=x, ydata=comparisonPotential.F(x), p0 = np.array([1, 0, -1, 1]), )
+            if (np.diag(pcov)/popt**2).sum() < 4:    
+                self.k, self.x_1, self.x_l, self.x_r = popt
+            else:
+                plt.plot(x, force_func(x, popt[0], popt[1])+const_slope_left(x, -1)+const_slope_right(x, 1))
+                plt.plot(x, comparisonPotential.F(x))
+                raise ValueError(popt, pcov)
+            print(popt)
+            print(pcov)
+        else:
+            self.k, self.x_1, self.x_l, self.x_r = x_0, x_1, x_l, x_r
+        
+        self.rect_n = lambda x: rect_n(x, self.k, self.x_1)
+        self.unboundedPotential = unboundedPotential
+        self.bounds_func = lambda x: bounds_func(x, self.x_l, self.x_r, self.k, self.x_1)
+        # self.const_slope_left = lambda x: const_slope_left_lambda(x, self.x_l)
+        # self.const_slope_right = lambda x: const_slope_right_lambda(x, self.x_r)
+        # self.const_slope_right = lambda x: sym.log(1+sym.exp(n*self.F_right*(x-self.x_r)))/n
+        super().__init__()
+        return None
+
+    def U_0(self, x):        
+        return self.bounds_func(x) + self.rect_n(x)*self.unboundedPotential(x)
+        
 class SimpleQuartic(potential_methods.BoundedForcePotential):
-    """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Inheriting from BoundedForcePotential will add all other necessary methods."""
+    """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define
+    all of the relevant parameters in __init__ and the form of the potential in U_0. Inheriting from BoundedForcePotential will add all other necessary methods."""
     
     def __init__(self, E_barrier=10, x_min=-5, x_max=5, F_left=50, force_asymmetry=1):
         """Define parameters used in the potential."""
@@ -284,23 +346,14 @@ class SimpleQuartic(potential_methods.BoundedForcePotential):
         return outstring
     
     def __repr__(self):
-        """
-        Do the same schtick as __str__ but now we don't have to make a print call.
-
-        Returns
-        -------
-        outstring : str
-            String representation of AsymmetricDoubleWellPotential.
-
-        """
+        """Do the same schtick as __str__ but now we don't have to make a print call."""
         return self.__str__()
 
-class HarmonicPotential(potential_methods.BoundedForcePotential):
+class BoundedHarmonicPotential(potential_methods.BoundedForcePotential):
     """Simple harmonic potential for comparison with double-well potentials."""
     
-    def __init__(self, E_0, F_left=50, force_asymmetry=1, x_char=1, x_min=-5, x_max=5):
-        self.E_0 = E_0
-        self.x_char=x_char
+    def __init__(self, k, F_left=50, force_asymmetry=1, x_min=-5, x_max=5):
+        self.k = k
         self.F_left = F_left
         self.F_right = force_asymmetry*self.F_left
         self.force_asymmetry = force_asymmetry
@@ -309,7 +362,7 @@ class HarmonicPotential(potential_methods.BoundedForcePotential):
         super().__init__()
     def U_0(self, x):
         """Unbounded potential definition."""
-        return 0.5*self.E_0*(x/self.x_char)**2
+        return 0.5*self.k*x**2
     def __str__(self):
         """I'm sure you can look up what __str__ does in classes."""
         variables = self.__dict__
@@ -329,6 +382,35 @@ class HarmonicPotential(potential_methods.BoundedForcePotential):
         """Do the same schtick as __str__."""
         return self.__str__
     
+class SimpleHarmonic(potential_methods.UnboundedForcePotential):
+    """Simple harmonic potential for comparison with double-well potentials."""
+    
+    def __init__(self, k, x_min=-5, x_max=5):
+        self.k = k
+        self.x_min=x_min
+        self.x_max=x_max
+        super().__init__()
+    def U_0(self, x):
+        """Unbounded potential definition."""
+        return 0.5*self.k*x**2
+    def __str__(self):
+        """I'm sure you can look up what __str__ does in classes."""
+        variables = self.__dict__
+        outstring = "SIMPLE QUARTIC POTENTIAL WITH FINITE MAXIMUM SLOPES\n"
+        for var in variables:
+            if not callable(variables[var]):
+                outstring += f"{var} : {variables[var]}\n"
+            else:
+                outstring += "\n"
+                # if var == 'mesh':
+                #     outstring += "\n"
+                # else:
+                #     x = sym.symbols("x")
+                #     outstring += f"{var}({x}) : {variables[var](x)}\n"
+        return outstring
+    def __repr__(self):
+        """Do the same schtick as __str__."""
+        return self.__str__
 # def polynomial_interpolator_with_derivatives(X, Y, derivatives=None):
 #     if derivatives is None:
 #         derivatives = np.zeros_like(Y)

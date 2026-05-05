@@ -188,23 +188,26 @@ class Ensemble(object):
             2D array(size = (expt_length//dt, num_temperatures)) of the histograms for each timestep.
 
         """
-        if x_min is None:
-            x_min = self.potential.x_min
-        if x_max is None:
-            x_max = self.potential.x_max
-        
         # returns an array of histograms 
         if (not (self.heights is None and self.bins is None)) and (not regenerate):
             return self.bins, self.heights # Don't do all this work if you've already done it before
         
         # binned_active_domain = np.linspace(x_min, x_max, bins) # In principle you should use binned_active_domains for computations but it's possible that the particles leave the box, in which case histogramming should be done over the full range of possible positions to avoid bugs.
-        self.global_min = np.min(self.data).data
-        self.global_max = np.max(self.data).data
-        binned_active_range = np.linspace(self.global_min, self.global_max, num_bins)
-        self.dx = binned_active_range[1]-binned_active_range[0]
+        if (x_min is None) and (x_max is None): # Both must be None
+            self.global_min = np.min(self.data).data
+            self.global_max = np.max(self.data).data
+            binned_active_range = np.linspace(self.global_min, self.global_max, num_bins)
+            self.dx = binned_active_range[1]-binned_active_range[0]
+            heights = histogram_function(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max])) # Using numba-optimised code speeds things up by 2-3x
+        else:
+            binned_active_range = np.linspace(x_min, x_max, num_bins)
+            self.global_min, self.global_max = x_min, x_max
+            self.dx = binned_active_range[1]-binned_active_range[0]
+            heights = histogram_function(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([x_min, x_max])) # Using numba-optimised code speeds things up by 2-3x
+        
 
         # heights = np.apply_along_axis(lambda data: np.histogram(data, bins=binned_active_range, density=True)[0], axis=1, arr=self.data)
-        heights = histogram_function(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max])) # Using numba-optimised code speeds things up by 2-3x
+        
         self.bins, self.heights = binned_active_range[:-1]+self.dx/2, heights
 
         return binned_active_range[:-1]+self.dx/2, heights # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
@@ -630,7 +633,7 @@ class Ensemble(object):
         plt.show()
         return None
 
-    def gut_checks(self, init=0, mid=341, end=6000, plot_init=True, plot_end=True, num_bins=100):
+    def gut_checks(self, init=0, mid=341, end=6000, plot_init=True, plot_end=True, num_bins=100, plot_symmetrised_histograms=False):
         """
         Plot a bunch of things just to verify that everything's working properly. Also return the variables we plot just in case we want to manipulate them somehow.
 
@@ -678,6 +681,13 @@ class Ensemble(object):
                 ax[i].plot(bins, heights_end_pred, 'blue', label=r"$\pi(x;T_c)$"*(i==0))
                 chi_squared = np.sum((heights_end[i,:] - heights_end_pred)**2 / heights_end_pred)
                 print(f"Final histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
+            if plot_symmetrised_histograms:
+                G_p_init = distance_functions.symmetrised_pdf(heights_init[i, :])
+                G_p_mid = distance_functions.symmetrised_pdf(heights_mid[i, :])
+                G_p_end = distance_functions.symmetrised_pdf(heights_end[i, :])
+                ax[i].plot(bins, G_p_init, 'r--', alpha=0.6)
+                ax[i].plot(bins, G_p_mid, color='orange', linestyle="--", alpha=0.6)
+                ax[i].plot(bins, G_p_end, 'g--', alpha=0.6)
             ax[i].set_ylabel(r"$p(x,t)$")
         if i == self.num_temperatures-1:
             fig.legend()
@@ -688,7 +698,7 @@ class Ensemble(object):
         return bins, [heights_init, heights_mid, heights_end]
     
     
-    def animate(self, T=None, num_bins=30, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100, max_left=-1, max_right=3):
+    def animate(self, T=None, num_bins=30, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100, max_left=-1, max_right=3, plot_initial_distro=True):
         """
         Animate p(x,t).
 
@@ -715,7 +725,8 @@ class Ensemble(object):
         """
         if T is None: T = float(self.data['T'].max())
         fine_active_range = np.linspace(self.potential.x_min, self.potential.x_max, num_bins*10)
-        binned_initial_distro = self.potential.boltzmann(fine_active_range, T)
+        if plot_initial_distro:
+            binned_initial_distro = self.potential.boltzmann(fine_active_range, T)
         binned_final_distro = self.potential.boltzmann(fine_active_range, 1) # Cold temperature is always 1
         num_times = len(self.data.t)
         
@@ -736,14 +747,15 @@ class Ensemble(object):
         ax.set_xlim((max_left,max_right))
         ax.set_xlabel("x")
         ax.set_ylabel("p(x,t)")
-        ax.plot(fine_active_range, binned_initial_distro, 'r')
+        if plot_initial_distro:
+            ax.plot(fine_active_range, binned_initial_distro, 'r')
         ax.plot(fine_active_range, binned_final_distro, 'g')
         ax.set_title(r"t = 0 $\mu$s")
         
         # Update function for the animation
         def update(frame_number):
             # Get the data for the current frame
-            heights, _ = all_heights[0,:,frame_number-1], bins
+            heights, _ = all_heights[T_index,:,frame_number-1], bins
             # Update the histogram data
             for i in range(len(patches)):
                 patches[i].set_height(heights[i])
