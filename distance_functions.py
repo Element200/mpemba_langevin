@@ -46,32 +46,16 @@ def L1(pdf_1, pdf_2, dx, axis=None):
 
 def Lp_constructor(p):
     """Returns a p-norm."""
-    def Lp(pdf_1, pdf_2, dx, axis=None):
+    def Lp(pdf_1, pdf_2, dx, axis=0):
         """
-        Find sum |pdf_2-pdf_1|^p_i. Does NOT calculate the integral; inputs must be converted to PMFs before function is called.
-    
-        Parameters
-        ----------
-        pdf_1 : 2D vector of numerics
-            Some probability density vector (this will not fail if pdf_1 is not a probability mass but the intended use case is for PMFs).
-        pdf_2 : 2D vector of numerics of same shape as pdf_1
-            Second probability density vector.
-        dx: float
-            Distance between bins
-        axis : int, optional
-            If pdf_1 is multi-dimensional, the axis to sum along. The default is None.
-        p : int, optional
-            The p in the p-norm. The default is 2.
-    
-        Returns
-        -------
-        float
-            sum |pdf_2-pdf_1|_i. If this is less than zero or greater than two, pdf_1 and pdf_2 are not correctly normalised.
-    
-        """
+        Find sum |pdf_2-pdf_1|^p_i. Does NOT calculate the integral; inputs must be converted to PMFs before function is called."""
         # pdf_1 and pdf_2 must be at least two-dimensional arrays
         assert pdf_1.shape[axis]==pdf_2.shape[axis], f"Mismatch between pdf_1 {np.array(pdf_1).shape} and pdf_2 {np.array(pdf_2).shape}"
         return dx*(np.sum(np.abs(pdf_2-pdf_1)**p, axis=axis)**(1/p))
+    def Linf(pdf_1, pdf_2, dx, axis=0):
+        return np.max(np.abs(pdf_2-pdf_1), axis=axis)*dx
+    if p == np.inf:
+        return Linf
     return Lp
 
 @numba.njit
@@ -131,10 +115,16 @@ def kullback_leibler(pdf_1, pdf_2, dx, axis=None, epsilon=None):
 
     """
     if epsilon is None:
-        epsilon = 1/(pdf_1.shape[axis]*dx)
-        print(epsilon)
+        if (0 in pdf_1) or (0 in pdf_2):
+            epsilon = 1/(pdf_1.shape[1]*dx)
+        else:
+            epsilon=0
+    p_1 = pdf_1+epsilon
+    p_1 /= np.expand_dims(p_1.sum(axis=axis)*dx, axis)
+    p_2 = pdf_2+epsilon # Add pseudocounts
+    p_2 /= np.expand_dims(p_2.sum(axis=axis)*dx, axis) # Renormalise after adding pseudocounts. np.expand is needed to ensure the shapes always work out.
     
-    log_ratio = np.where(np.isfinite(np.log(pdf_1)-np.log(pdf_2)), np.log(pdf_1)-np.log(pdf_2), epsilon*np.ones_like(pdf_1))
+    log_ratio = np.log(pdf_1+epsilon)-np.log(pdf_2+epsilon) # This should always be finite now
     
     # if len(pdf_1.shape) == 2:
     #     helper = _helper_2D
@@ -142,7 +132,7 @@ def kullback_leibler(pdf_1, pdf_2, dx, axis=None, epsilon=None):
     #     helper = _helper_3D
     # else:
     #     raise NotImplementedError
-    return np.sum(pdf_1*log_ratio, axis=axis)*dx # If an element in pdf_1 is zero, pdf_1*log(epsilon) = 0.
+    return np.sum(p_1*log_ratio, axis=axis)*dx # If an element in pdf_1 is zero, pdf_1*log(epsilon) = 0.
 def KL_constructor(epsilon):
     return lambda pdf_1, pdf_2, dx, axis: kullback_leibler(pdf_1, pdf_2, dx=dx, axis=axis, epsilon=epsilon)
 
@@ -171,23 +161,9 @@ def kolmogorov_smirnov(pdf_1, pdf_2, dx, axis=None):
     return np.max(np.abs(CDF2-CDF1), axis=axis)
 
 def KS_empirical(data, CDF, x):
-    """
-    Use the empirical CDF generated from data to compare it to a proper CDF. Uses scipy's methods. CDF is an array --- we generate an interpolating function to pass to scipy.
-
-    Parameters
-    ----------
-    data : TYPE
-        DESCRIPTION.
-    CDF : TYPE
-        DESCRIPTION.
-
-    Returns
-    -------
-    None.
-
-    """
+    """Use the empirical CDF generated from data to compare it to a proper CDF. Uses scipy's methods. CDF is an array --- we generate an interpolating function to pass to scipy. TODO"""
     CDF_interpolated = lambda t: np.interp(t, x, CDF)
-    return CDF_interpolated
+    pass # TODO
 
 def entropic_distance(pdf_1, pdf_2, dx, axis=None, energies=None, k_BT_c=1):
     def log_helper(pdf):

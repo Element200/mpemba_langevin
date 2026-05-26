@@ -15,7 +15,7 @@ from tqdm import tqdm
 import xarray as xr
 import scipy
 
-def chunk_splitter(dataframe, dt=1e-5, state_to_extract='protocol', state_phase_lag=0, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}):
+def chunk_splitter_deprecated(dataframe, dt=1e-5, state_to_extract='protocol', state_phase_lag=0, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}):
     """
     Turn one giant dataarray of particle trajectories into an xarray DataArray that stores each individual particle's trajectory in a new dimension --- this gives us something we can work with.
 
@@ -58,7 +58,7 @@ def chunk_splitter(dataframe, dt=1e-5, state_to_extract='protocol', state_phase_
     times = chunks[0,:,t_index]*dt # Assumes all time columns are identical
     return xr.Dataset(data_vars={col: (['n','t'],chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =2)
 
-def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protocol', state_phase_lag=0, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}):
+def chunk_splitter(dataframe, temperatures, dt=1e-5, state_to_extract='protocol', state_phase_lag=0, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}):
     """
     Turn one giant dataarray of particle trajectories into an xarray DataArray that stores each individual particle's trajectory in a new dimension --- this gives us something we can work with. Updated to work with interwoven temperature data.
 
@@ -118,7 +118,7 @@ def chunk_splitter_v2(dataframe, temperatures, dt=1e-5, state_to_extract='protoc
     data = xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': sorted_temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
     return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
 
-def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','drift','state','x0'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
+def extract_file_data_deprecated(filenames, protocol_time, dt=1e-5, column_names=['x','t','drift','state','x0'], cols_to_extract= ['x'], temperatures = [1000,12,1]):
     """
     Convert experimental file data into an ensemble with the same structure as that of the simulation.
 
@@ -147,7 +147,7 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
     chunks = {}
     n_min = np.inf # Minimum number of particles in an array. Initially set to infinity because any number is less than infinity.
     for filename in filenames:
-        chunks[filename] = chunk_splitter(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state']))
+        chunks[filename] = chunk_splitter_deprecated(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state']))
         n = int(chunks[filename]['n'][-1]) # Number of particles in chunks['filename']
         if n < n_min:
             n_min = int(chunks[filename]['n'][-1]) # Once this for loop is done running, n_min will hold the lowest number of particles in the dataarray
@@ -157,7 +157,8 @@ def extract_file_data(filenames, protocol_time, dt=1e-5, column_names=['x','t','
     # array = xr.DataArray(data, dims=['T','n','t'], coords={'T':temperatures, 't': np.arange(0,protocol_time,dt)})
     return array
 
-def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = {2: 1000,1: 12, 0: 1}, k_BT_b=1):
+
+def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = {2: 12,1: 3, 0: 1}, k_BT_b=1):
     """
     Extract file data from new version of protocol that interweaves temperatures.
     This function is kind of redundant. You can mostly just directly use chunk_splitter_v2. 
@@ -166,8 +167,6 @@ def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t'
     ----------
     filename : str
         directory+filename of data.
-    protocol_time : numeric
-        Length of the protocol.
     dt : numeric, optional
         Timestep (must be less than protocol_time, obviously). The default is 1e-5.
     column_names : vector of str, optional
@@ -185,9 +184,10 @@ def extract_file_data_v2(filename, protocol_time, dt=1e-5, column_names=['x','t'
     """
     if not k_BT_b in temperatures.values():
         raise ValueError("No reference temperature!")
-    # temperatures = sorted(temperatures, reverse = True) # Sort temperatures in descending order
-    chunks = chunk_splitter_v2(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']), temperatures=temperatures) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
+    chunks = chunk_splitter(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']), temperatures=temperatures) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
     return chunks
+
+#def get_single_trajectories(filename, )
 
 def get_drifts(filename, protocol_time, calibration_time, velocity=True, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], temperatures = {2: 1000,1: 12, 0: 1}, k_BT_b=1, approximate_positioning_time=1e-3):
     """
@@ -386,3 +386,4 @@ def load_processed_data(filenames, temperatures={0: 1000,1: 12,2: 1}):
     t = data[-1].columns # Assumes the time columns are all the same
     da = xr.DataArray(data, dims=('T', 'n', 't'), coords = {'T': sorted_temperatures, 't':t})
     return da.sortby('T', ascending=False)
+

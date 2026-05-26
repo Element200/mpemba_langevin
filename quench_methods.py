@@ -59,7 +59,7 @@ class InstantaneousQuench(QuenchProtocol):
         super().__init__(a)
     def h(self, t):
         """Trivial quench function."""
-        return 1
+        return np.ones_like(t)
     
 class InfinitelySlowQuench(QuenchProtocol):
     def __init__(self, a=None):

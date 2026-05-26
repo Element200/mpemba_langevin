@@ -154,11 +154,11 @@ def langevin_simulation_virtualPotential(x_0, dt=dt, gamma=1/150, expt_length = 
     X_i = x_0.copy()+initial_measurement_noise # Measured position (which has measurement nosie)
     X_i_ = X_i.copy() # Lagging "true" position
     X = np.zeros((*x_0.shape, timesteps)) # Preallocating space and mutating the array is more efficient than appending data
-    X[...,0] = X_i.copy() # We can only measure the measured position, not the true position (you may have guessed this from the name)
+    X[...,0] = X_i.copy() # We can only measure the measured position, not the true position (you may have guessed this from the fact that we call it the "measured position")
     t = np.arange(0,expt_length, dt)
     D = k_BT_b*temperature_function(t)/gamma
     thermal_fluctuation_std = np.sqrt(2*D*dt)
-    stochastic_displacement = np.random.normal(0,thermal_fluctuation_std, size=(*x_0.shape, timesteps)) # Precalculate the noise terms we will use in the integral -- speeds up code. One array of noise (same shape as x_0) is needed per timestep. 
+    stochastic_displacement = thermal_fluctuation_std[np.newaxis, np.newaxis, :]*np.random.uniform(0, 1, size=(*x_0.shape, timesteps)) # np.random.normal(0,thermal_fluctuation_std, size=(*x_0.shape, timesteps)) # Precalculate the noise terms we will use in the integral -- speeds up code. One array of noise (same shape as x_0) is needed per timestep. 
     if measurement_noise_std != 0:
         measurement_noise = np.random.normal(0, measurement_noise_std, size=stochastic_displacement.shape) 
     else:

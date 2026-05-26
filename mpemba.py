@@ -163,7 +163,7 @@ class Ensemble(object):
             raise TypeError("Ensembles come from different potentials!")
         new_data = xr.concat([self.data, other.data], dim='n')
         return Ensemble(new_data, self.potential)
-    def get_histograms(self, x_max=None, x_min=None, num_bins=100, regenerate=False, histogram_function=fast_histogram):
+    def get_histograms(self, x_max=None, x_min=None, num_bins=100, regenerate=False, histogram_function=fast_histogram, symmetric_domain=False):
         """
         Histogram over ensemble number. If self.bins and self.heights are already generated, return them; this will only do work if self.bins and self.heights are None and None.
 
@@ -179,6 +179,8 @@ class Ensemble(object):
             Recalculate the number of bins. If set to False and histograms are already generated, it will pull cached bins+histogram
         histogram_function : function, optional
             The function to use to calculate the histograms. The default is the numba-optimised fast_histogram
+        symmetric_domain : bool, optional
+            Choose bins so that the output bins is symmetric
 
         Returns
         -------
@@ -194,9 +196,17 @@ class Ensemble(object):
         
         # binned_active_domain = np.linspace(x_min, x_max, bins) # In principle you should use binned_active_domains for computations but it's possible that the particles leave the box, in which case histogramming should be done over the full range of possible positions to avoid bugs.
         if (x_min is None) and (x_max is None): # Both must be None
-            self.global_min = np.min(self.data).data
-            self.global_max = np.max(self.data).data
-            binned_active_range = np.linspace(self.global_min, self.global_max, num_bins)
+            global_min = np.min(self.data).data
+            global_max = np.max(self.data).data
+            if symmetric_domain:
+                extent = np.abs([global_min, global_max]).max()
+                self.global_min = -extent
+                self.global_max = extent
+                binned_active_range = np.linspace(-extent, extent, num_bins)
+            else:
+                self.global_min = global_min
+                self.global_max = global_max
+                binned_active_range = np.linspace(self.global_min, self.global_max, num_bins)
             self.dx = binned_active_range[1]-binned_active_range[0]
             heights = histogram_function(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max])) # Using numba-optimised code speeds things up by 2-3x
         else:
@@ -305,7 +315,7 @@ class Ensemble(object):
         cold_histogram, _ = np.histogram(cold_data, bins=num_bins, range=bin_range, density=True)
         return np.array(cold_histogram)
     
-    def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3), use_true_distro=False, k_BT_b=1, **kwargs_for_steady_state_inference):
+    def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3), use_true_distro=False, symmetric_domain = False, k_BT_b=1, **kwargs_for_steady_state_inference):
         """
         Get the distance of the ensemble to equilibrium, defined by eqbm_boltzmann_distro.
 
@@ -330,7 +340,7 @@ class Ensemble(object):
             Distances at each timestep, for each temperature.
 
         """
-        bins, heights = self.get_histograms(num_bins=num_bins, regenerate=regenerate) # Generate the variables we need
+        bins, heights = self.get_histograms(num_bins=num_bins, regenerate=regenerate, symmetric_domain=symmetric_domain) # Generate the variables we need
         if eqbm_boltzmann_distro is None:
             if use_true_distro:
                 eqbm_boltzmann_distro = self.potential.boltzmann_PMF(bins, k_BT=k_BT_b)/self.dx # Turn PMF into PDF
@@ -697,7 +707,22 @@ class Ensemble(object):
         plt.show()
         return bins, [heights_init, heights_mid, heights_end]
     
-    
+    def PDF_evolution(self, max_x=2, min_x=-2, **kwargs_for_histograms):
+        fig, ax = plt.subplots(self.num_temperatures)
+        bins, pdfs = self.get_histograms(**kwargs_for_histograms)
+        for i, temp in enumerate(self.temperatures):
+            pcm = ax[i].pcolormesh(self.times[1:], bins, np.copy(pdfs[i,:,1:]), vmin=0, vmax=1, shading='auto', cmap='magma')
+            ax[i].set_ylim((min_x, max_x))
+            ax[i].set_ylabel(r'$x/\sigma$')
+            ax[i].set_xscale('log')
+            ax[i].axhline(0, color='w', linestyle='--', linewidth=0.5)
+            ax[i].set_title(fr"$T_0={temp}$")
+            if i != self.num_temperatures-1:
+                ax[i].tick_params(labelbottom=False)
+        cbar = fig.colorbar(pcm, ax=ax, orientation='vertical')
+        cbar.set_label(r'$p(x,t)$')
+        ax[-1].set_xlabel(r"$t$")
+        return None
     def animate(self, T=None, num_bins=30, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100, max_left=-1, max_right=3, plot_initial_distro=True):
         """
         Animate p(x,t).
@@ -772,7 +797,7 @@ class Ensemble(object):
         plt.show()
         return ani
     
-    def compare_to_simulations(self, D):
+    def compare_to_simulations(self, D, **other_kwargs_for_simulations):
         """
         Run a simulation with the same parameters and return an ensemble to compare against.
 
@@ -788,7 +813,7 @@ class Ensemble(object):
 
         """
         gamma = self.temperatures.min()/D # gamma = k_BT/D
-        simulated_data = simulation_methods.run_mpemba_simulations(k_BTs=self.temperatures, num_particles=self.N, potential=self.potential, expt_length=self.expt_length, save_memory=True, gamma=gamma)
+        simulated_data = simulation_methods.run_mpemba_simulations(k_BTs=self.temperatures, num_particles=self.N, potential=self.potential, expt_length=self.expt_length, save_memory=True, gamma=gamma, **other_kwargs_for_simulations)
         simulated_ensemble = Ensemble(simulated_data, self.potential)
         return simulated_ensemble
 
@@ -833,7 +858,7 @@ class Ensemble(object):
         distances_df.to_csv(filename)
         return None
 
-def run_mpemba_data_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x', 't', 'V', 'state', 'drift', 'x0'], temperatures=[1000,12,1], gut_checks=True, process_data = False, distance_function=distance_functions.L1):
+def run_mpemba_data_analysis(filename, potential, protocol_time=7e-2, dt=1e-5, column_names = ['x', 't', 'V', 'state', 'drift', 'x0', 'temperatures'], temperatures={0:12,1:3,2:1}, gut_checks=True, process_data = False, plot_energies=False, distance_function=distance_functions.L1, processed_filename_suffix = "_loaded"):
     """
     High-level functions to run all of the basic analysis defined here.
 
@@ -864,22 +889,24 @@ def run_mpemba_data_analysis(filenames, potential, protocol_time=7e-2, dt=1e-5, 
         Average energy at each timestep.
 
     """
-    # I've only defined Asymmetric_DoubleWell_WithMaxSlope but in principle any class with the right keywords can be defined
-    data = file_processing.extract_file_data(filenames, protocol_time=protocol_time, dt=dt, column_names=column_names, temperatures=temperatures)[0]
+    data = file_processing.extract_file_data(filename, protocol_time=protocol_time, dt=dt, column_names=column_names, temperatures=temperatures)[0]
     # data has the form we want of an ensemble
     ensemble = Ensemble(data, potential)
     print(potential) # Summary stats of potential
     if gut_checks:
         ensemble.gut_checks(plot_init=True)
     distances = ensemble.get_distances(distance_function=distance_function)
-    energies = ensemble.get_average_energy()
+    
     times = ensemble.data.t
-    fig2, ax2 = plt.subplots(2)
-    ax2[0].loglog(times, distances.T)
-    ax2[1].loglog(times, energies.T)
+    fig, ax = plt.subplots()
+    ax.loglog(times, distances.T)
+    if plot_energies:
+        ax2 = fig.add_subplot()
+        energies = ensemble.get_average_energy()
+        ax2.loglog(times, energies.T)
     if process_data:
-        today = pd.to_datetime('today').strftime('%Y_%m_%d')
-        filename = today+f", x_max={ensemble.potential.x_max}, N={ensemble.N}"
+        # today = pd.to_datetime('today').strftime('%Y_%m_%d')
+        filename = filename+processed_filename_suffix
         ensemble.export_data(filename, distance_function=distance_function) # Process the data and store it.
 
     return ensemble

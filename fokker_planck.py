@@ -16,6 +16,7 @@ import numba
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import os
+from tqdm import tqdm
 
 directory = os.path.dirname(__file__)
 
@@ -49,36 +50,93 @@ D = 150
 # bumpy = mpemba.special_potentials.BumpyAsymmetricDoubleWellPotential(x_max=7,x_min=-5, E_barrier=3, E_tilt=0.7, force_asymmetry = 0.2, b=-0.05, n=1)
 bumpy = mpemba.special_potentials.BumpyAsymmetricDoubleWellPotential(x_max=5,x_min=-5, E_barrier=2, E_tilt=0.5, force_asymmetry = 0.4, b=-0.0, n=1)
 potential = mpemba.special_potentials.AsymmetricDoubleWellPotential(x_min=-4, x_max=6, E_barrier=2, E_tilt=0.4, force_asymmetry=0.5)
+other_potential = mpemba.special_potentials.AsymmetricDoubleWellPotential(x_min=-6, x_max=6, E_barrier=2, E_tilt=0.6, force_asymmetry=0.3) # Also has decent results
 
 # k_BTs = np.logspace(0, np.log(15)/np.log(10), 200)
 # a_2s = potential.a_k_boltzmannIC(k_BTs, n_x=1000)
 # bumpy_a_2s = bumpy.a_k_boltzmannIC(k_BTs, n_x=1000)
 # plt.semilogx(k_BTs, np.abs(np.array([a_2s, bumpy_a_2s]).T))
 
+@numba.njit(cache=True, fastmath=True)
+def fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_tolerance=1e-3, h_vals=None):
+    n = p_0.shape[0]
 
-@numba.njit
-def fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_tolerance=1e-3, h=numba.njit(lambda t:np.ones_like(t)), integrator=euler_step):
+    p = p_0.copy()
+    p_new = np.empty_like(p)
+
+    saved = np.zeros((n, steps // saving_timestep), dtype=p.dtype)
+
+    if h_vals is None:
+        h_vals = np.ones(steps, dtype=p.dtype)
+
+    prefactor = D / (dx * dx)
+
+    save_idx = 0
+
+    S_plus = np.diag(S, k=1)
+    S_minus = np.diag(S, k=-1)
+
+    for t in range(steps):
+
+        h = h_vals[t]
+        scale = h * prefactor
+        inv_h = 1.0 / h
+
+        diag_plus = S_plus**inv_h
+        diag_minus = S_minus**inv_h
+        diag_0 = -np.array([0, *diag_plus]) - np.array([*diag_minus, 0])
+        # W is a sparse matrix, and it slows down code tremendously to compute a full matrix-vector product over such large scales. diag_0 is an array one bigger than diag_plus or diag_minus
+        
+        wp = diag_0[0]*p[0] + diag_plus[0]*p[1]
+        p_new[0] = p[0] + dt * scale * wp # Boundary condition on the left
+
+        # Interior
+        for i in range(1, n - 1):
+            wp = diag_minus[i-1]*p[i-1] + diag_0[i]*p[i] + diag_plus[i]*p[i+1]
+            p_new[i] = p[i] + dt*scale*wp
+
+        # Right BC
+        wp = diag_minus[n-2]*p[n-2] + diag_0[n-1]*p[n-1]
+        p_new[n - 1] = p[n - 1] + dt*scale*wp
+
+        p, p_new = p_new, p
+        if t % saving_timestep == 0:
+            Z = p.sum() * dx # Check normalisation
+            if abs(Z - 1.0) > error_tolerance:
+                raise ValueError("Probability conservation failed", Z, t)
+            saved[:, save_idx] = p
+            save_idx += 1
+    return saved
+
+def fokker_planck_core_deprecated(p_0, S, dx, dt, steps, saving_timestep, D, error_tolerance=1e-3, h_vals=None, integrator=euler_step):
     """Numba-optimised Fokker-Planck integration."""
     p = p_0.copy()
     saved = np.zeros((*p_0.shape, steps//saving_timestep), dtype=p_0.dtype)
-    W = D*S/dx**2
-    t_vals = np.linspace(0, steps*dt, steps)
-    h_vals = h(t_vals) # Precompute outside the hot loop for speed
+    t_vals = np.arange(steps)*dt
+    if h_vals is None:
+        h_vals = np.ones_like(t_vals)
     for i in range(steps):
-        p_prev = np.copy(p)
-        p = integrator(W*h_vals[i], p, dt) # euler is faster than RK4 and the accuracy difference is not that big
-        if np.isnan(p).any():
-            raise ValueError("Probability vector contains NaNs", i, np.isnan(p).sum(), p_prev)
+        # p_prev = np.copy(p)
+        diag_plus = np.diag(S, k=1)**(1/h_vals[i])
+        diag_minus = np.diag(S, k=-1)**(1/h_vals[i])
+        diag_0 = -np.array([0, *diag_plus])-np.array([*diag_minus, 0])
+        W = np.diag(diag_plus, k=+1) + np.diag(diag_minus, k=-1) + np.diag(diag_0, k=0) # Directly raising S to a power causes bugs because of the negative numbers on the diagonals.
+        W *= h_vals[i]*D/dx**2
+        p = integrator(W, p, dt) # euler is faster than RK4 and the accuracy difference is not that big
+        
+        # if np.isnan(p).any():
+        #     raise ValueError("Probability vector contains NaNs", i, np.isnan(p).sum(), p_prev)
         if (i % saving_timestep == 0):
-            saved[..., i//saving_timestep] = p.copy()
             Z = p.sum() * dx
-            if not np.isclose(Z, 1.0, atol=error_tolerance): # We check that Z ~= 1 every so often so that we can check that our integration hasn't screwed up and kill the loop if it has.
-                raise ValueError("Integration failure! Z=", Z, i)
+            if not np.isclose(Z, 1.0, atol=error_tolerance):
+                raise ValueError("Probability conservation failed! Z=", Z, "t=", i)
+            saved[..., i//saving_timestep] = p.copy()
+            
     return saved
 
 
 
-def fokker_planck_solver(p_0, potential, D, t_max, dt=1e-6, h=lambda t: 1, saving_timestep=1000, error_tolerance=1e-3, integrator=euler_step):
+def fokker_planck_solver(p_0, potential, D, t_max, dt=np.float64(1e-6), h=lambda t: np.ones_like(t), saving_timestep=1000, error_tolerance=1e-3, integrator=euler_step, x=None):
     """
     Solve the FPE for time-independent potential U(x) = potential.U(x) and diffusivity D. You can also specify a diffusivity protocol.
 
@@ -112,15 +170,22 @@ def fokker_planck_solver(p_0, potential, D, t_max, dt=1e-6, h=lambda t: 1, savin
         p(t) if t//dt is a multiple of saving_timestep.
 
     """
-    width = potential.x_max-potential.x_min
-    dx = width/len(p_0)
-    x = np.linspace(potential.x_min, potential.x_max, len(p_0))
+    
+    if x is None:
+        x = np.linspace(potential.x_min, potential.x_max, len(p_0))
+        width = potential.x_max-potential.x_min
+        dx = width/len(p_0)
+    else:
+        dx = x[1]-x[0]
     S = potential.grima_newman_discretisation(x=x)
     steps = int(t_max//dt)
-    out = fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_tolerance=error_tolerance, integrator=integrator)
+    t_vals = np.arange(steps)*dt
+    h_vals = h(t_vals)
+    
+    out = fokker_planck_core(p_0, S, dx, dt, steps, saving_timestep, D, error_tolerance=error_tolerance, h_vals=h_vals)
     return np.array(out)
 
-def analytic_solution(k_BTs, potential, D, n_x = 500, t_max = 0.1, dt=1e-6, resolution = 1e-5, error_tolerance=1e-3, integrator=euler_step):
+def analytic_solution(k_BTs, potential, D, n_x = 500, t_max = 0.1, dt=1e-6, resolution = 1e-5, error_tolerance=1e-3, integrator=euler_step, FPE_solver=fokker_planck_solver, quench_protocol = mpemba.quench_methods.InstantaneousQuench(), k_BT_b=1):
     """
     Analytically solves the FPE given p(x,0) is a boltzmann distro with temperatures in k_BTs.
 
@@ -153,7 +218,8 @@ def analytic_solution(k_BTs, potential, D, n_x = 500, t_max = 0.1, dt=1e-6, reso
     x = np.linspace(potential.x_min, potential.x_max, n_x)
     for k_BT in tqdm(k_BTs):
         p_0 = potential.boltzmann(x, k_BT)
-        p_outs.append(fokker_planck_solver(p_0, potential, D, t_max=t_max, dt=dt, saving_timestep=int(resolution//dt), error_tolerance=error_tolerance, integrator=integrator))
+        quench_protocol.set_a(k_BT/k_BT_b-1)
+        p_outs.append(FPE_solver(p_0, potential, D, t_max=t_max, dt=dt, saving_timestep=int(resolution//dt), error_tolerance=error_tolerance, integrator=integrator, h=quench_protocol.h))
     return np.array(p_outs)
 
 def quasistatic_limit(potential, h, times, k_BT_b=1, n_x=500):
@@ -191,6 +257,11 @@ def analytical_distances_to_boltzmann(p_trajectories, potential, distance_functi
     pi = potential.boltzmann(x, k_BT_b)
     pi_structured = np.repeat(np.reshape(pi, (1,*pi.shape, 1)), p_trajectories.shape[0], axis=0)
     return distance_function(p_trajectories, pi_structured, dx=dx, axis=axis)
+
+# if __name__ == '__main__':
+#     quench = mpemba.quench_methods.ExponentialQuench(None, 1e-3)
+#     p_outs = analytic_solution([22,4,1], potential0, D=150, n_x=500, t_max=6e-2, FPE_solver=fokker_planck_solver_instQuench, dt=1e-5, error_tolerance=1e-2, quench_protocol=quench)
+#     plt.semilogx(np.arange(6e-2//1e-5)*1e-5, analytical_distances_to_boltzmann(p_outs, potential0).T)
 
 def compare_to_analytic_solution(ensemble, D, distance_function=mpemba.distance_functions.L1, plot=True, **kwargs_for_analytic_soln):
     k_BTs = ensemble.temperatures[ensemble.temperatures != 1] # Don't waste time computing D[pi_c, pi_c] = 0

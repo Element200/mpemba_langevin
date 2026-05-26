@@ -313,6 +313,7 @@ class Potential(object):
         len(x)*len(x) matrix.
 
         """
+        # if self.grima_newman is None: # Cache S to save time
         U_vals = self.U(x)
         dU = (U_vals-np.roll(U_vals, 1))[1:]
         diag_plus = np.exp(dU/2)
@@ -343,9 +344,10 @@ class Potential(object):
         """
         S = self.grima_newman_discretisation(x)
         dx = x[1]-x[0] # Assumes uniform spacing
-        return h(t)*D*S/dx**2
+        S_scale = S**(1/h(t)) # S(t) = S**(1/h(t)) elementwise
+        return h(t)*D*S_scale/dx**2
     
-    def eigs_k(self, D, k=2, x=None, imaginary_tolerance = 1e-4, n_x=500):
+    def eigs_k(self, D, k=2, x=None, imaginary_tolerance = 1e-4, n_x=500, k_BT_c=1):
         """
         Get k`th eigenvalue lambda_k and associated eigenfunction v_k, assuming an initial state characterised by p_0. We compute eigenfunctions by taking the eigenvectors of the W-matrix we define using the Grima-Newman method.
 
@@ -376,8 +378,8 @@ class Potential(object):
             x = np.linspace(self.x_min, self.x_max, n_x)
         dx = x[1]-x[0]
         S = self.grima_newman_discretisation(x) # If S is not too huge, ndarrays should be fine
-        # We don't need the W-matrix at all since W = scale_factor*S, which will only affect eigenvalues, which we don't care about anyway
-        eigenvals, left_eigenvecs, right_eigenvecs = scipy.linalg.eig(S, right=True, left=True)
+        S_scaled = k_BT_c*(S**(1/k_BT_c)) # Considering S at a different bath temperature requires that we scale the elements of S like this.
+        eigenvals, left_eigenvecs, right_eigenvecs = scipy.linalg.eig(S_scaled, right=True, left=True)
         abs_eigenvals_index = np.abs(eigenvals).argsort()
         
         eigenvals_sorted = eigenvals[abs_eigenvals_index]
@@ -389,7 +391,7 @@ class Potential(object):
         
         eigenval_k = eigenvals_sorted[k-1]
         if np.abs(eigenval_k.imag) > imaginary_tolerance:
-            raise ValueError("Eigenvectors were not correctly computed")
+            raise ValueError("Eigenvectors were not correctly computed") # All eigenvalues should be real, otherwise something's wrong!
         return eigenval_k*D/dx**2, left_eigenvec_k, right_eigenvec_k # Eigenvalues are affected by a scale factor
     
     def a_k(self, p_0, k=2, x=None, imaginary_tolerance = 1e-4):
