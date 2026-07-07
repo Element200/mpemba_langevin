@@ -152,7 +152,7 @@ def langevin_simulation_virtualPotential(x_0, dt=dt, gamma=1/150, expt_length = 
     timesteps = round(expt_length/dt)
     initial_measurement_noise = np.random.normal(0, measurement_noise_std, num_particles)
     x_i = x_0 # "true" position
-    X_i = x_0.copy()+initial_measurement_noise # Measured position (which has measurement nosie)
+    X_i = x_0.copy()+initial_measurement_noise # Measured position (which has measurement noise)
     X_i_ = X_i.copy() # Lagging "true" position
     X = np.zeros((*x_0.shape, timesteps)) # Preallocating space and mutating the array is more efficient than appending data
     X[...,0] = X_i.copy() # We can only measure the measured position, not the true position (you may have guessed this from the fact that we call it the "measured position")
@@ -323,16 +323,12 @@ def heating_cycle_mpemba_simulation(k_BTs, num_particles, potential, quench_prot
     Parameters
     ----------
     k_BTs : Vector of numerics. At least one of these should be 1.
-    
-    
     num_particles : int
         Number of particles in the ensemble (preferably >1000).
     potential : Potential object
         An object that is equipped with methods to calculate the potential, forces, etc.
     quench_protocol : function, optional
         Quench function to use. The default is lambda k_BT: k_BT.
-    num_allowed_initial_positions : int, optional
-        The size of the array we'll draw initial positions from. Ideally this should be large. The default is 100_000.
     dt : numeric, optional
         Timestep for Ito integration. The default is 1e-5.
     expt_length : numeric, optional

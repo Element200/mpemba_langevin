@@ -81,7 +81,7 @@ def chunk_splitter(dataframe, temperatures, dt=1e-5, state_to_extract='protocol'
 def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = {2: 12,1: 3, 0: 1}, k_BT_b=1):
     """
     Extract file data from new version of protocol that interweaves temperatures.
-    This function is kind of redundant. You can mostly just directly use chunk_splitter. 
+    This function is kind of redundant and only really exists because of previous versions. It's basically a wrapper for chunk_splitter.
 
     Parameters
     ----------
@@ -99,7 +99,7 @@ def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','
     Returns
     -------
     array : xarray.DataArray.
-        Array with appropriate dimensions with the same structure as after the simulation, so that further analysis on either data is identical.
+        xarray.Dataset with dimensions ('T','n','t') where 'T' is the temperature in multiples of k_BT_b, 'n' the ensemble index, and 't' the time in seconds. The data variables of the dataset are all of the elements in cols_to_extract.
     
     """
     if not k_BT_b in temperatures.values():
@@ -107,8 +107,72 @@ def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','
     chunks = chunk_splitter(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']), temperatures=temperatures) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
     return chunks
 
-def heating_cycle_extraction():
-    pass
+def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','state','force','eta','T'], cols_to_extract= ['x'], temperatures = {0: 12, 1: 3, 2: 1}, k_BT_b=1, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}, positioning_time=3e-2):
+    """
+    Extracts *both* the heating ("positioning", using noise instead of initial PDFs) and cooling ("protocol") steps. Assumes the positioning step is fixed-size; thus this code only works with Mpemba_Exp_Sane_v10 and later.
+
+    Parameters
+    ----------
+    filename : str
+        director+filename of the feedback trap output.
+    dt : numeric, optional
+        Feedback time. The default is 1e-5.
+    column_names : list of str, optional
+        List of column names. The elements in the list should be unique and the length of the list should match the number of columns in the data. The default is ['x','t','drift','state','force','eta','T'].
+    cols_to_extract : list of str, optional
+        List of column names we actually care about *besides* 't', 'state', and 'T', which are all essential to process the data. The default is ['x'] (i.e. we only care about the position). If you want to also measure the noise over time, for example, you may want to set this to ['x', 'eta']. 
+    temperatures : dict of int-numeric pairs, optional
+        Dictionary assigning the numeric states to the temperatures they correspond to. The default is {0: 12, 1: 3, 2: 1}.
+    k_BT_b : numeric, optional
+        Bath temperature. The default is 1. You're probably never going to set this to anything other than 1 but it's there if you need it.
+    positioning_time : numeric, optional
+        The time allowed for the positioning step in the same units as dt. The default is 3e-2
+
+    Returns
+    -------
+    chunks: xarray.Dataset with dimensions ('T','n','t') where 'T' is the temperature in multiples of k_BT_b, 'n' the ensemble index, and 't' the time in seconds. The data variables of the dataset are all of the elements in cols_to_extract. We treat the heating as occuring at negative times; the state switches from 'positioning' to 'protocol' at t=0.
+    """
+    if not k_BT_b in temperatures.values():
+        raise ValueError("No reference temperature!")
+    dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T'])
+    # Each chunk contains one particle's trajectory
+    # To save memory, we will get rid of the time column (assuming all time columns are identical)
+    
+    masked_data = dataframe[dataframe['state']!=states['calibration']] # THIS WILL BREAK if the positioning step is not fixed-size. We're also assuming that there are only THREE states.
+    forward = dataframe[1:].reset_index(drop=True)
+    state_transitions = (forward['state']==states['calibration']) & (dataframe['state']==states['protocol'])
+    pivots = dataframe[state_transitions].index + 1
+    chunks = []
+    expected_length = len(masked_data.loc[pivots[0]:pivots[1]])
+    for i in range(len(pivots)-1):
+        chunk = masked_data.loc[pivots[i]:pivots[i+1]]
+        if len(chunk) == expected_length:
+            chunks.append(chunk) # Avoid adding a trajectory if there's some weirdness in the chunk splitting that causes nonuniformity.
+
+    chunks = np.array(chunks) # This is always the step that breaks if you have data with uneven column sizes.
+    data_cols = list(dataframe.columns)
+    cols_to_extract = {col: data_cols.index(col) for col in data_cols if (not col in ['t','state', 'T'])} # We extract all of the columns except for time, state, and temperature
+    t_index = data_cols.index('t') # Get index of the time column
+    T_index = data_cols.index('T') # Get index of temperature column
+    
+    temp_index = list(set(dataframe['T'])) # Get all unique temperature indices
+    sorted_temperatures = [temperatures[temp] for temp in temp_index]
+    num_protocols = np.inf
+    split_chunks = []
+    for T in temp_index:
+        split_chunk = np.where((chunks[...,T_index]==T)[...,np.newaxis], chunks, np.nan) # [...,np.newaxis] needed so dimensions are comparable
+        mask = ~np.all(np.isnan(split_chunk), axis=tuple(range(1, split_chunk.ndim)))
+        # Allows us to mask our data without losing dimensional info
+        split_chunks.append(split_chunk[mask])
+        if num_protocols > len(split_chunk[mask]):
+            num_protocols = len(split_chunk[mask])
+    adjusted_chunks = np.array([split_chunks[i][:num_protocols,:] for i,T in enumerate(temp_index)])
+    times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical.
+    positioning_index = positioning_time//dt
+    times -= times[positioning_index] # State transitions at t=0.
+    data = xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': sorted_temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
+    return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
+    
 
 def get_single_trajectories(filename, max_protocol_length = 100_000, T=2, column_names=['x','t','drift','state','force','x0','T']):
     short_df = pd.read_table(filename, names=column_names, usecols=['x','T','t'], nrows=max_protocol_length)
