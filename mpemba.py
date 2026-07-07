@@ -637,7 +637,7 @@ class Ensemble(object):
         """
         if temp is None: temp = self.data['T'][0]
         _ = self.get_histograms() # generate global_min and global_max
-        plt.plot(range(int(self.expt_length//self.dt)+1), self.data.loc[temp, np.random.choice(self.N, num_trajectories),:].T)
+        plt.plot(self.times, self.data.loc[temp, np.random.choice(self.N, num_trajectories),:].T)
         plt.plot([0,self.expt_length/self.dt],[[self.potential.x_min,self.potential.x_max], [self.potential.x_min, self.potential.x_max]], 'r')
         plt.plot([0,self.expt_length/self.dt],[[self.global_min,self.global_max], [self.global_min,self.global_max]], 'g')
         plt.show()
@@ -855,6 +855,7 @@ class Ensemble(object):
         distances = self.get_distances(eqbm_boltzmann_distro=eqbm_boltzmann_distro, distance_function=distance_function)
         distances_df = pd.DataFrame(distances.T, columns=self.temperatures)
         distances_df.index = self.data.t
+        distances_df.index.name = 't'
         distances_df.to_csv(filename)
         return None
 

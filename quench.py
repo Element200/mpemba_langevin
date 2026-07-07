@@ -62,10 +62,11 @@ class InstantaneousQuench(QuenchProtocol):
     
     def __init__(self, a=None):
         """Initialise the class. a doesn't really matter here since h(t) = 1 for all t > 0, but we do need it so that we can inherit from QuenchProtocol."""
+        self.a=a
         super().__init__(a)
     def h(self, t):
         """Trivial quench function."""
-        return 1
+        return 1*(t>=0) + (self.a+1)*(t<0)
 
 class ExponentialQuench(QuenchProtocol):
     """Child class of the quench protocol for Newtonian cooling -- exponential decay to bath temperature."""
@@ -76,4 +77,4 @@ class ExponentialQuench(QuenchProtocol):
         super().__init__(a)
     def h(self, t):
         """Exponential quench protocol -- equal to a+1 = k_BT_h/k_BT_b at t=0 and 1 when t->inf."""
-        return self.a*np.exp(-t/self.tau)+1
+        return (self.a*np.exp(-t/self.tau)+1)*(t>=0) + (self.a+1)*(t<0)

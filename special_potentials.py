@@ -94,6 +94,77 @@ class AsymmetricDoubleWellPotential(potential_methods.BoundedForcePotential):
 
         """
         return self.__str__()
+    
+class AsymmetricDoubleWellPotential_noWalls(potential_methods.UnboundedForcePotential):
+    """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define all of the relevant parameters in __init__ and the form of the potential in U_0. Inheriting from BoundedForcePotential will add all other necessary methods."""
+    
+    def __init__(self, E_barrier=2, E_tilt=1.3, x_well=0.5, x_min=-1, x_max=2, F_left=50, force_asymmetry=1):
+        """Define parameters used in the potential."""
+        self.E_barrier = E_barrier
+        self.E_tilt = E_tilt
+        self.x_well = x_well
+        self.x_min = x_min
+        self.x_max = x_max
+        self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
+        self.F_left = F_left
+        self.F_right = force_asymmetry*F_left
+        super().__init__() # Initialise the parent class *after* useful variables are defined so that it knows what variables to use
+        return None
+    
+    def U_0(self, x, t=None):
+        """
+        Generate basic potential (without bounded derivatives) evaluated at x.
+
+        Parameters
+        ----------
+        x : numeric or vector of numerics
+            Position(s).
+        t : numeric
+            Time to evaluate potential at
+
+        Returns
+        -------
+        Numeric or vector of numerics
+            Potential evaluated at x at time t. For now this is time-independent.
+
+        """
+        return self.E_barrier*(1-2*(x/self.x_well)**2 + (x/self.x_well)**4) - self.E_tilt*(x/self.x_well)/2
+    
+    def __str__(self):
+        """
+        Print all the variables we use in the potential.
+
+        Returns
+        -------
+        outstring : str
+            String representation of AsymmetricDoubleWellPotential.
+
+        """
+        variables = self.__dict__
+        outstring = "ASYMMETRIC DOUBLE-WELLED QUARTIC POTENTIAL WITH FINITE MAXIMUM SLOPES\n"
+        for var in variables:
+            if not callable(variables[var]):
+                outstring += f"{var} : {variables[var]}\n"
+            else:
+                outstring += "\n"
+                # if var == 'mesh':
+                #     outstring += "\n"
+                # else:
+                #     x = sym.symbols("x")
+                #     outstring += f"{var}({x}) : {variables[var](x)}\n"
+        return outstring
+    
+    def __repr__(self):
+        """
+        Do the same schtick as __str__ but now we don't have to make a print call.
+
+        Returns
+        -------
+        outstring : str
+            String representation of AsymmetricDoubleWellPotential.
+
+        """
+        return self.__str__()
 
 class BumpyAsymmetricDoubleWellPotential(potential_methods.Potential):
     """Asymmetric double-well potential with odd-polynomial 'bump'. Kind of, sort of inherits from AsymmetricDoubleWellPotential, but direct inheritance made my life hard so I'm just doing it this way."""
@@ -291,7 +362,7 @@ class SimpleQuartic(potential_methods.BoundedForcePotential):
     """Basic asymmetric double-well potential that we use for Mpemba simulations. Any potential can be defined here: simply define
     all of the relevant parameters in __init__ and the form of the potential in U_0. Inheriting from BoundedForcePotential will add all other necessary methods."""
     
-    def __init__(self, E_barrier=10, x_min=-5, x_max=5, F_left=50, force_asymmetry=1):
+    def __init__(self, E_barrier=10, E_tilt=0, x_min=-5, x_max=5, F_left=50, force_asymmetry=1):
         """Define parameters used in the potential."""
         self.E_barrier = E_barrier
         self.x_min = x_min
