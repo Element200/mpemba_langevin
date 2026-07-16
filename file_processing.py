@@ -270,9 +270,10 @@ class BrownianEnsemble(object):
     def __init__(self, data, dt=1e-5):
         self.data = data
         self.dt=dt
-    def get_PSD(self, noverlap=50):
+    def get_PSD(self, noverlap=0, nwindows=20):
         """TODO."""
-        f, P = scipy.signal.welch(self.data, fs=1/self.dt, noverlap=noverlap, axis=0, nperseg=1e6)
+        f, P = scipy.signal.welch(self.data, fs=1/self.dt, noverlap=noverlap, axis=0, nperseg=int(len(self.data)//nwindows))
+        return f, P[:,0]
 
 def fit_aliased_lorentzian(f, P, dt=1e-5, noverlap=50):
     """

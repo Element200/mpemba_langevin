@@ -51,8 +51,11 @@ def in_range(x, lower, upper):
 
 # def memoised_fast_integration(func, x_upper, x_lower):
     
-def construct_simulated_ensemble(potential, **kwargs_for_simulations):
-    data = simulation_methods.run_mpemba_simulations(potential=potential, **kwargs_for_simulations)
+def construct_simulated_ensemble(potential, k_BTs, num_particles, heating_cycle = False, **kwargs_for_simulations):
+    if heating_cycle:
+        data = simulation_methods.heating_cycle_mpemba_simulation(potential=potential, k_BTs=k_BTs, num_particles=num_particles, **kwargs_for_simulations)
+    else:
+        data = simulation_methods.run_mpemba_simulations(potential=potential, k_BTs=k_BTs, num_particles=num_particles, **kwargs_for_simulations)
     return Ensemble(data, potential)
 
 @numba.njit(parallel=True)
@@ -150,6 +153,7 @@ class Ensemble(object):
         self.N = data.shape[1] # The second axis must be the number of trials
         self.dt = float(self.data.t[1]-self.data.t[0])
         self.expt_length = data.shape[-1]*dt # The last axis must be the timesteps
+        data['t'] = np.round(data['t'], 5) # Round all values to five decimal places to avoid annoying floating point bugs
         self.times = data['t']
         self.bins, self.heights = None, None
         self.distances = None
@@ -218,9 +222,10 @@ class Ensemble(object):
 
         # heights = np.apply_along_axis(lambda data: np.histogram(data, bins=binned_active_range, density=True)[0], axis=1, arr=self.data)
         
-        self.bins, self.heights = binned_active_range[:-1]+self.dx/2, heights
-
-        return binned_active_range[:-1]+self.dx/2, heights # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
+        # self.bins, self.heights = binned_active_range[:-1]+self.dx/2, heights
+        self.pdfs = xr.DataArray(heights, dims=(['T','x','t']), coords=[self.temperatures, binned_active_range[:-1]+self.dx/2, self.times])
+        # Centre the bins before returning them so that they can be plotted properly. Also throw away the first element so that the array have the same first dimensional-shape
+        return self.pdfs
     
     def get_CDFs(self, axis = 1, **kwargs):
         """
@@ -315,6 +320,17 @@ class Ensemble(object):
         cold_histogram, _ = np.histogram(cold_data, bins=num_bins, range=bin_range, density=True)
         return np.array(cold_histogram)
     
+    def check_for_clipping(self, temperature = None, distance_function=distance_functions.L1, plot=True, equilibration_time=1e-2, num_bins=100, **kwargs_for_histograms):
+        if temperature is None:
+            temperature = self.temperatures[0]
+        equilibration_data = self.data.loc[temperature,:,-equilibration_time:0].to_numpy().flatten() # This will produce weird AF results if you're not using an ensemble with equilibration data intact
+        low_noise_pdf, bins = np.histogram(equilibration_data, bins=self.pdfs.x)
+        if plot:
+            plt.bar(self.pdfs.x, low_noise_pdf, width=self.dx)
+            x = self.potential.mesh(500)
+            plt.plot(x, self.potential.boltzmann(x, temperature))
+        return low_noise_pdf
+    
     def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3), use_true_distro=False, symmetric_domain = False, k_BT_b=1, **kwargs_for_steady_state_inference):
         """
         Get the distance of the ensemble to equilibrium, defined by eqbm_boltzmann_distro.
@@ -340,7 +356,8 @@ class Ensemble(object):
             Distances at each timestep, for each temperature.
 
         """
-        bins, heights = self.get_histograms(num_bins=num_bins, regenerate=regenerate, symmetric_domain=symmetric_domain) # Generate the variables we need
+        pdfs = self.get_histograms(num_bins=num_bins, regenerate=regenerate, symmetric_domain=symmetric_domain) # Generate the variables we need
+        bins = pdfs.x
         if eqbm_boltzmann_distro is None:
             if use_true_distro:
                 eqbm_boltzmann_distro = self.potential.boltzmann_PMF(bins, k_BT=k_BT_b)/self.dx # Turn PMF into PDF
@@ -348,7 +365,7 @@ class Ensemble(object):
                 eqbm_boltzmann_distro = self.infer_steady_state(len(bins), np.array([self.global_min, self.global_max]), **kwargs_for_steady_state_inference)
             eqbm_boltzmann_distro = np.repeat(np.reshape(eqbm_boltzmann_distro, (1,*eqbm_boltzmann_distro.shape)), self.num_temperatures, axis=0) # ASSUMES STRUCTURE OF ENSEMBLE IS (T,n,t)!!!!!
             eqbm_boltzmann_distro = np.reshape(eqbm_boltzmann_distro, (*eqbm_boltzmann_distro.shape, 1))
-        distances = distance_function(heights, eqbm_boltzmann_distro, self.dx, axis=1)
+        distances = distance_function(pdfs.to_numpy(), eqbm_boltzmann_distro, self.dx, axis=1)
         if use_smoothing:
             kernel = np.array(kernel/np.sum(kernel)) # Normalise the kernel
             kernel_radius = kernel.shape[0]//2
@@ -643,73 +660,81 @@ class Ensemble(object):
         plt.show()
         return None
 
-    def gut_checks(self, init=0, mid=341, end=6000, plot_init=True, plot_end=True, num_bins=100, plot_symmetrised_histograms=False):
+    def plot_histograms(self, init=0, mid=341e-5, end=5000e-5, plot_init=True, plot_end=True, num_bins=100, plot_symmetrised_histograms=False, print_chisq=False):
         """
         Plot a bunch of things just to verify that everything's working properly. Also return the variables we plot just in case we want to manipulate them somehow.
 
         Parameters
         ----------
-        init : int, optional
-            Timestep corresponding to the first timestep. The default is 0.
-        mid : int, optional
-            Timestep corresponding to some middle timestep (since relaxation is exponential this should be very shortly after init). The default is 341.
-        end : int, optional
-            The final timestep, when the system has fully equilibriated. The default is 6000.
+        init : numeric, optional
+            Time corresponding to the first timestep. The default is 0.
+        mid : numeric, optional
+            Time corresponding to some middle timestep (since relaxation is exponential this should be very shortly after init). The default is 3.41e-3.
+        end : numeric, optional
+            The final timestep, when the system has fully equilibriated. The default is 5e-2.
         plot_init : bool, optional
             Plot the predicted Boltzmann distribution at t=0
         plot_fin : bool, optional
             Plot the predicted Boltzmann distribution at t -> inf
+        num_bins : int, optional
+           Number of bins in the histogram. Default is 100.
+        plot_symmetrised_histograms : bool
+            For the symmetrisation Mpemba experiments. If true, plots the 'twirled' G[p(x,t)] = (p(x,t)+p(-x,t))/2. Default is False
+        print_chisq : bool
+            Print the chi^2 value of the empirical PDFs wrt the true Boltzmann distro. Only works if plot_init or plot_fin is set to True.
 
         Returns
         -------
-        bins : 1D array
-            The bins we get by histogramming.
-        list : list of three 1D arrays
-            Heights for each timestep.
+        list of three 1D Xarrays
+            Heights at t = init, mid, and end.
         """
         plt.close()
-        bins, heights = self.get_histograms(num_bins=num_bins)
-        heights_init = heights[...,init]
-        heights_mid = heights[...,mid]
-        heights_end = heights[...,end]
+        pdfs = self.get_histograms(num_bins=num_bins)
+        bins = pdfs.x
+        heights_init = pdfs.loc[...,init]
+        heights_mid = pdfs.loc[...,mid]
+        heights_end = pdfs.loc[...,end]
         fig, ax = plt.subplots(self.num_temperatures)
         if self.num_temperatures == 1:
             ax = [ax] # Annoyingly, plt.subplots(1) does not yield a list of axes with one element.
-        for i in range(self.num_temperatures):
-            # ax[i].title("T =", self.data['T'][i])
-            # print(self.dx)
-            ax[i].bar(bins, heights_init[i,:], color = 'red', width = self.dx, label=f"t={init}"*(i==0), alpha=0.3) # Multiplying by (i==0) ensures we don't get redundant labels
-            ax[i].bar(bins, heights_mid[i,:], color = 'orange', width = self.dx, label=f"t={mid}"*(i==0), alpha=0.3)
-            ax[i].bar(bins, heights_end[i,:], color = 'green', width = self.dx, label=f"t={end}"*(i==0), alpha=0.3)
+        for i, T in enumerate(self.temperatures):
+            # ax[i].title(f"T = {T}")
+            ax[i].bar(bins, heights_init.loc[T,...], color = 'red', width = self.dx, label=f"t={init}"*(i==0), alpha=0.3) # Multiplying by (i==0) ensures we don't get redundant labels
+            ax[i].bar(bins, heights_mid.loc[T,...], color = 'orange', width = self.dx, label=f"t={mid}"*(i==0), alpha=0.3)
+            ax[i].bar(bins, heights_end.loc[T,...], color = 'green', width = self.dx, label=f"t={end}"*(i==0), alpha=0.3)
             if plot_init:
-                heights_init_pred = self.potential.boltzmann_PMF(bins, k_BT=self.temperatures[i])/self.dx
-                chi_squared = np.sum((heights_init[i,:] - heights_init_pred)**2 / heights_init_pred)
-                print(f"Initial histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
+                heights_init_pred = self.potential.boltzmann_PMF(bins, k_BT=T)/self.dx
+                if print_chisq:
+                    chi_squared = np.sum((heights_init.loc[T,...] - heights_init_pred)**2 / heights_init_pred)
+                    print(f"Initial histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
                 ax[i].plot(bins, heights_init_pred, 'red', label=r"$\pi(x;T_0)$"*(i==0)) # fr-strings are both formatted strings and raw strings, apparently
             if plot_end:
                 heights_end_pred = self.potential.boltzmann_PMF(bins, k_BT=1)/self.dx # Final distro always has T=1
                 ax[i].plot(bins, heights_end_pred, 'blue', label=r"$\pi(x;T_c)$"*(i==0))
-                chi_squared = np.sum((heights_end[i,:] - heights_end_pred)**2 / heights_end_pred)
-                print(f"Final histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
+                if print_chisq:
+                    chi_squared = np.sum((heights_end.loc[T,...] - heights_end_pred)**2 / heights_end_pred)
+                    print(f"Final histogram, T = {self.temperatures[i]}: chi^2 =", chi_squared)
             if plot_symmetrised_histograms:
-                G_p_init = distance_functions.symmetrised_pdf(heights_init[i, :])
+                G_p_init = distance_functions.symmetrised_pdf(heights_init.loc[T, ...])
                 G_p_mid = distance_functions.symmetrised_pdf(heights_mid[i, :])
                 G_p_end = distance_functions.symmetrised_pdf(heights_end[i, :])
                 ax[i].plot(bins, G_p_init, 'r--', alpha=0.6)
                 ax[i].plot(bins, G_p_mid, color='orange', linestyle="--", alpha=0.6)
                 ax[i].plot(bins, G_p_end, 'g--', alpha=0.6)
             ax[i].set_ylabel(r"$p(x,t)$")
+        
         if i == self.num_temperatures-1:
             fig.legend()
+        
         plt.tight_layout()
         plt.xlabel("$x$")
 
-        plt.show()
-        return bins, [heights_init, heights_mid, heights_end]
+        return [heights_init, heights_mid, heights_end]
     
     def PDF_evolution(self, max_x=2, min_x=-2, **kwargs_for_histograms):
         fig, ax = plt.subplots(self.num_temperatures)
-        bins, pdfs = self.get_histograms(**kwargs_for_histograms)
+        pdfs = self.get_histograms(**kwargs_for_histograms)
+        bins = pdfs.x
         for i, temp in enumerate(self.temperatures):
             pcm = ax[i].pcolormesh(self.times[1:], bins, np.copy(pdfs[i,:,1:]), vmin=0, vmax=1, shading='auto', cmap='magma')
             ax[i].set_ylim((min_x, max_x))
@@ -729,7 +754,7 @@ class Ensemble(object):
 
         Parameters
         ----------
-        T : int, optional
+        T : numeric, optional
             The temperature to use. The default is the hot temperature.
         num_bins : int, optional
             Number of bins to use in the histogram. The default is 200.
@@ -749,16 +774,20 @@ class Ensemble(object):
 
         """
         if T is None: T = float(self.data['T'].max())
+        
         fine_active_range = np.linspace(self.potential.x_min, self.potential.x_max, num_bins*10)
         if plot_initial_distro:
             binned_initial_distro = self.potential.boltzmann(fine_active_range, T)
+        
         binned_final_distro = self.potential.boltzmann(fine_active_range, 1) # Cold temperature is always 1
+        
         num_times = len(self.data.t)
         
         fig, ax = plt.subplots()
-        bins, all_heights = self.get_histograms(num_bins=num_bins)
+        all_heights = self.get_histograms(num_bins=num_bins).to_numpy()
+        bins = self.pdfs.x
         T_index = list(self.data['T'].to_numpy()).index(T) # Get the index of the desired temperature
-        patches = ax.bar(bins, all_heights[0,:,0]/self.N, width=bins[1]-bins[0])
+        patches = ax.bar(bins, all_heights[0,:,0].to_numpy()/self.N, width=bins[1]-bins[0])
         ax_height = np.max(binned_final_distro + 0.02)
         ax.set_ylim(0,ax_height)
         

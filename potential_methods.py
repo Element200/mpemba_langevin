@@ -452,48 +452,64 @@ class Potential(object):
         plt.semilogx(k_BTs, a_2s)
         return None
     
-    def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, method='a_2', tolerance=1e-3, use_infinite_domain=False, return_max_a = False, k_BT_min=1, n_x=500):
+    def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, tolerance=1e-3, k_BT_min=1, n_x=500, max_loops=50):
         """
-        Check if a fast Mpemba effect exists and if so, find the temperature at which it occurs.
+        Check if a fast Mpemba effect exists and if so, find the temperature at which it occurs by binary searching for the temperature where the a_2 coefficient goes to zero.
 
         Parameters
         ----------
         k_BT_max : numeric
             Highest temperature to check.
-        n_T : int
-            Number of temperatures.
-        method : str ('a_2' or 'P')
-            Which method to use to determine whether a fast Mpemba effect occurs.
 
         Returns
         -------
         Temperature at which Mpemba effect occurs, if any.
 
         """
-        k_BTs = np.logspace(np.log(k_BT_min)/np.log(10), np.log(k_BT_max)/np.log(10), n_T)        
-        k_BTs[0] = 1 # Jugaad hotfix
-        if method == 'a_2':
-            a_2s = self.a_k_boltzmannIC(k_BTs, n_x=n_x)
-            arr = a_2s
-        elif method == 'P':
-            right_probability_ratios = self.right_half_probability_ratio(k_BTs, use_infinite_domain=use_infinite_domain)
-            arr = right_probability_ratios
-        else:
-            raise ValueError("Only using a_2 and probability ratios can a strong Mpemba effect be determined.")
-        closeToTarget = np.isclose(arr[1:], arr[0]*np.ones_like(arr[1:]), atol=tolerance)
-        fastMpembaEffectOccurs = closeToTarget.any() # arr[0]*np.ones_like(arr) is a string of zeros if arr is the a_2 values and a string of the initial probability values if arr is the P-ratios. 
-        # Exclude arr[0] because that will trivially always be True.
-        if fastMpembaEffectOccurs:
-            print("Strong Mpemba effect detected!")
-            if return_max_a and (method=='a_2'):
-                lowest_a_2 = k_BTs[1:][closeToTarget][0]
-                k_BTs[1:][closeToTarget], k_BTs[(arr==arr[arr<lowest_a_2].max())]
-            return k_BTs[1:][closeToTarget]
-        else:
-            print("No strong Mpemba effect detected.")
-            return None
+        assert np.sign(self.a_k_boltzmannIC(k_BT_max, n_x=n_x)) != np.sign(self.a_k_boltzmannIC(k_BT_min+tolerance, n_x=n_x))
+        up = k_BT_max
+        down = k_BT_min
+        trial_solution = (up+down)/2
+        out = self.a_k_boltzmannIC(trial_solution, n_x=n_x)
+        while np.abs(out) > tolerance:
+            if max_loops <=0:
+                print("Convergence failed!")
+                break
+            out = self.a_k_boltzmannIC(trial_solution, n_x=n_x)
+            print(trial_solution)
+            in_up = self.a_k_boltzmannIC(up, n_x=n_x)
+            # in_down = self.a_k_boltzmannIC(down, n_x=n_x)
+            if np.sign(out) == np.sign(in_up):
+                up = trial_solution
+            else:
+                down = trial_solution
+            trial_solution = (up+down)/2
+            max_loops -= 1
+        return trial_solution
+        # k_BTs = np.logspace(np.log(k_BT_min)/np.log(10), np.log(k_BT_max)/np.log(10), n_T)        
+        # k_BTs[0] = 1 # Jugaad hotfix
+        # if method == 'a_2':
+        #     a_2s = self.a_k_boltzmannIC(k_BTs, n_x=n_x)
+        #     arr = a_2s
+        # elif method == 'P':
+        #     right_probability_ratios = self.right_half_probability_ratio(k_BTs, use_infinite_domain=use_infinite_domain)
+        #     arr = right_probability_ratios
+        # else:
+        #     raise ValueError("Only using a_2 and probability ratios can a strong Mpemba effect be determined.")
+        # closeToTarget = np.isclose(arr[1:], arr[0]*np.ones_like(arr[1:]), atol=tolerance)
+        # fastMpembaEffectOccurs = closeToTarget.any() # arr[0]*np.ones_like(arr) is a string of zeros if arr is the a_2 values and a string of the initial probability values if arr is the P-ratios. 
+        # # Exclude arr[0] because that will trivially always be True.
+        # if fastMpembaEffectOccurs:
+        #     print("Strong Mpemba effect detected!")
+        #     if return_max_a and (method=='a_2'):
+        #         lowest_a_2 = k_BTs[1:][closeToTarget][0]
+        #         k_BTs[1:][closeToTarget], k_BTs[(arr==arr[arr<lowest_a_2].max())]
+        #     return k_BTs[1:][closeToTarget]
+        # else:
+        #     print("No strong Mpemba effect detected.")
+        #     return None
         
-    def infer_worst_temperature(self, k_BT_max, n_T = 100, tolerance=1e-3, use_infinite_domain=False, return_max_a = False, k_BT_min=1, n_x=500):
+    def infer_worst_temperature(self, k_BT_max, tolerance=1e-3, k_BT_min=1, n_x=500, max_loops=100):
         """
         Find the value of T for which d/dT (a_2(T)) = 0 (this will be the 'warm' temperature to select).
 
@@ -511,23 +527,54 @@ class Potential(object):
         Temperature at which Mpemba effect occurs, if any.
 
         """
-        k_BTs = np.logspace(np.log(k_BT_min)/np.log(10), np.log(k_BT_max)/np.log(10), n_T)        
-        k_BTs[0] = 1
-        a_2s = self.a_k_boltzmannIC(k_BTs, n_x=n_x)
-        arr = np.gradient(a_2s)
+        phi = (-1+np.sqrt(5))/2
+        f = lambda T: np.abs(self.a_k_boltzmannIC(T, n_x=n_x))
+        up = k_BT_max
+        down = k_BT_min
         
-        closeToTarget = np.isclose(arr[1:], np.zeros_like(arr[1:]), atol=tolerance)
-        slopeChangeOccurs = closeToTarget.any() # 
-        # Exclude arr[0] because that will trivially always be True.
-        if slopeChangeOccurs:
-            print("Local maximum exists!")
-            if return_max_a:
-                lowest_a_2 = k_BTs[1:][closeToTarget][0]
-                k_BTs[1:][closeToTarget], k_BTs[(arr==arr[arr<lowest_a_2].max())]
-            return k_BTs[1:][closeToTarget]
-        else:
-            print("No strong Mpemba effect detected.")
-            return None
+        new_down = down + phi*(up-down)
+        new_up = up - phi*(up-down)
+        in_up = f(new_up)
+        in_down = f(new_down)
+        
+        while np.abs(up-down) > tolerance:
+            if max_loops <=0:
+                print("Convergence failed!")
+                break
+            if in_up < in_down:
+                down = new_down
+                new_down = new_up
+                in_down = in_up
+                new_up = up - phi*(up-down)
+                in_up = f(new_up)
+            else:
+                up = new_up
+                new_up = new_down
+                in_up = in_down
+                new_down = down + phi*(up-down)
+                in_down = f(new_down)
+            max_loops -= 1        
+            print((up+down)/2)
+        out = (up+down)/2
+        return out, f(out)
+    
+        # k_BTs = np.logspace(np.log(k_BT_min)/np.log(10), np.log(k_BT_max)/np.log(10), n_T)        
+        # k_BTs[0] = 1
+        # a_2s = self.a_k_boltzmannIC(k_BTs, n_x=n_x)
+        # arr = np.gradient(a_2s)
+        
+        # closeToTarget = np.isclose(arr[1:], np.zeros_like(arr[1:]), atol=tolerance)
+        # slopeChangeOccurs = closeToTarget.any() # 
+        # # Exclude arr[0] because that will trivially always be True.
+        # if slopeChangeOccurs:
+        #     print("Local maximum exists!")
+        #     if return_max_a:
+        #         lowest_a_2 = k_BTs[1:][closeToTarget][0]
+        #         k_BTs[1:][closeToTarget], k_BTs[(arr==arr[arr<lowest_a_2].max())]
+        #     return k_BTs[1:][closeToTarget]
+        # else:
+        #     print("No strong Mpemba effect detected.")
+        #     return None
         
     # def stronger_mpemba_condition(self, k_BT_h, k_BT_w, D, n_x=500):
     #     """Use my janky-ass strong condition to infer the Mpemba effect if lambda_3 is very low, with the helpful L1 distance. Returns the predicted time of crossing."""

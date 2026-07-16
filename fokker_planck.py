@@ -265,7 +265,7 @@ def analytical_distances_to_boltzmann(p_trajectories, potential, distance_functi
 
 def compare_to_analytic_solution(ensemble, D, distance_function=mpemba.distance_functions.L1, plot=True, **kwargs_for_analytic_soln):
     k_BTs = ensemble.temperatures[ensemble.temperatures != 1] # Don't waste time computing D[pi_c, pi_c] = 0
-    pdfs = analytic_solution(k_BTs, ensemble.potential, D, **kwargs_for_analytic_soln)
+    pdfs = analytic_solution(k_BTs, ensemble.potential, D, t_max = float(np.max(ensemble.times)), **kwargs_for_analytic_soln)
     distances = analytical_distances_to_boltzmann(pdfs, ensemble.potential)
     if plot:
         # plt.semilogx(ensemble.times, distances.T)
