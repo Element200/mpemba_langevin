@@ -116,7 +116,8 @@ def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','
         .select([*cols_to_extract, 't', 'state', 'T']) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
         .collect(engine='streaming'))# Chunk and speed up 
         dataframe = df.to_pandas()
-    dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
+    else:
+        dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
     # Each chunk contains one particle's trajectory
     # To save memory, we will get rid of the time column (assuming all time columns are identical)
     masked_data = dataframe[dataframe['state']==states[state_to_extract]]
@@ -152,7 +153,7 @@ def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','
     data = xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': sorted_temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
     return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
 
-def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','state','force','eta','T'], cols_to_extract= ['x'], temperatures = {0: 12, 1: 3, 2: 1}, k_BT_b=1, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}, positioning_time=3e-2):
+def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','state','force','eta','T'], cols_to_extract= ['x'], temperatures = {0: 12, 1: 3, 2: 1}, k_BT_b=1, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}, positioning_time=3e-2, fast_load=True):
     """
     Extracts *both* the heating ("positioning", using noise instead of initial PDFs) and cooling ("protocol") steps. Assumes the positioning step is fixed-size; thus this code only works with Mpemba_Exp_Sane_v10 and later.
 
@@ -179,7 +180,13 @@ def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','s
     """
     if not k_BT_b in temperatures.values():
         raise ValueError("No reference temperature!")
-    dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T'], dtype=np.float32)
+    if fast_load:
+        df = (pl.scan_csv(filename, separator='\t', has_header=False, new_columns=column_names)
+        .select([*cols_to_extract, 't', 'state', 'T']) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
+        .collect(engine='streaming'))# Chunk and speed up 
+        dataframe = df.to_pandas()
+    else:
+        dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T'])
     # Each chunk contains one particle's trajectory
     # To save memory, we will get rid of the time column (assuming all time columns are identical)
     
@@ -213,7 +220,7 @@ def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','s
             num_protocols = len(split_chunk[mask])
     adjusted_chunks = np.array([split_chunks[i][:num_protocols,:] for i,T in enumerate(temp_index)])
     times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical.
-    positioning_index = positioning_time//dt
+    positioning_index = int(positioning_time//dt)
     times -= times[positioning_index] # State transitions at t=0.
     data = xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': sorted_temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
     return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
