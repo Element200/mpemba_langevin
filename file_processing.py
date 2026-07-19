@@ -15,6 +15,7 @@ from tqdm import tqdm
 import xarray as xr
 import scipy
 import os
+import polars as pl
 
 
 def chunk_splitter(dataframe, temperatures, dt=1e-5, state_to_extract='protocol', state_phase_lag=0, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}):
@@ -45,7 +46,7 @@ def chunk_splitter(dataframe, temperatures, dt=1e-5, state_to_extract='protocol'
     # Each chunk contains one particle's trajectory
     # To save memory, we will get rid of the time column (assuming all time columns are identical)
     masked_data = dataframe[dataframe['state']==states[state_to_extract]]
-    forward = dataframe[1:].reset_index(drop=True)
+    forward = dataframe.shift(-1)
     pivots = dataframe[(forward['state']==states['calibration']) & (dataframe['state']==states['protocol'])].index + 1 - state_phase_lag
     chunks = []
     expected_length = len(masked_data.loc[pivots[0]:pivots[1]])
@@ -78,7 +79,7 @@ def chunk_splitter(dataframe, temperatures, dt=1e-5, state_to_extract='protocol'
     return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
 
 
-def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = {2: 12,1: 3, 0: 1}, k_BT_b=1):
+def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','force','x0','T'], cols_to_extract= ['x'], temperatures = {2: 12,1: 3, 0: 1}, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}, state_to_extract = 'protocol', k_BT_b=1, state_phase_lag=0, fast_load=True):
     """
     Extract file data from new version of protocol that interweaves temperatures.
     This function is kind of redundant and only really exists because of previous versions. It's basically a wrapper for chunk_splitter.
@@ -95,6 +96,12 @@ def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','
         A subset of column_names -- this is the data you want to extract. The default is ['x'].
     temperatures : vector of numeric, optional
         Temperatures of the data, scaled by one of the temperatures. At least one of the temperatures must be 1. The default is [1000,12,1].
+    state_phase_lag : int, optional
+        If the state resets at the moment the time variable is also reset to 0, this is equal to zero. If it lags by 1, set this to one, etc. The default is 0 (i.e. assuming that the state variable resets properly with time).
+    states : dict of str-int pairs, optional
+        A list of states and their corresponding keys. The default is {'calibration':0, 'positioning':1, 'protocol':2}. You could in principle just hardcode this but it's generalisable (and hopefully more readable) now; you're welcome. 
+    fast_load : bool, optional. TEMPORARY
+        Use the polars library to speed up loading txt files with less risk of memory errors. I'll hardcode this once testing is complete.
 
     Returns
     -------
@@ -104,8 +111,46 @@ def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','
     """
     if not k_BT_b in temperatures.values():
         raise ValueError("No reference temperature!")
-    chunks = chunk_splitter(pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']), temperatures=temperatures) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
-    return chunks
+    if fast_load:
+        df = (pl.scan_csv(filename, separator='\t', has_header=False, new_columns=column_names)
+        .select([*cols_to_extract, 't', 'state', 'T']) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
+        .collect(engine='streaming'))# Chunk and speed up 
+        dataframe = df.to_pandas()
+    dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T']) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
+    # Each chunk contains one particle's trajectory
+    # To save memory, we will get rid of the time column (assuming all time columns are identical)
+    masked_data = dataframe[dataframe['state']==states[state_to_extract]]
+    forward = dataframe.shift(-1)
+    pivots = dataframe[(forward['state']==states['calibration']) & (dataframe['state']==states['protocol'])].index + 1 - state_phase_lag
+    chunks = []
+    expected_length = len(masked_data.loc[pivots[0]:pivots[1]])
+    for i in range(len(pivots)-1):
+        chunk = masked_data.loc[pivots[i]:pivots[i+1]]
+        if len(chunk) == expected_length:
+            chunks.append(chunk) # Avoid adding a trajectory if there's some weirdness in the chunk splitting that causes nonuniformity.
+
+    chunks = np.array(chunks) # This is always the step that breaks if you have data with uneven column sizes.
+    data_cols = list(dataframe.columns)
+    cols_to_extract = {col: data_cols.index(col) for col in data_cols if (not col in ['t','state', 'T'])} # We extract all of the columns except for time, state, and temperature
+    t_index = data_cols.index('t') # Get index of the time column
+    T_index = data_cols.index('T') # Get index of temperature column
+    
+    temp_index = list(set(dataframe['T'])) # Get all unique temperature indices
+    sorted_temperatures = [temperatures[temp] for temp in temp_index]
+    num_protocols = np.inf
+    split_chunks = []
+    for T in temp_index:
+        split_chunk = np.where((chunks[...,T_index]==T)[...,np.newaxis], chunks, np.nan) # [...,np.newaxis] needed so dimensions are comparable
+        mask = ~np.all(np.isnan(split_chunk), axis=tuple(range(1, split_chunk.ndim)))
+        # Allows us to mask our data without losing dimensional info
+        split_chunks.append(split_chunk[mask])
+        if num_protocols > len(split_chunk[mask]):
+            num_protocols = len(split_chunk[mask])
+    adjusted_chunks = np.array([split_chunks[i][:num_protocols,:] for i,T in enumerate(temp_index)])
+    times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical.
+    times -= times[0] # Time should start at 0
+    data = xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': sorted_temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
+    return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
 
 def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','state','force','eta','T'], cols_to_extract= ['x'], temperatures = {0: 12, 1: 3, 2: 1}, k_BT_b=1, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}, positioning_time=3e-2):
     """
@@ -134,7 +179,7 @@ def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','s
     """
     if not k_BT_b in temperatures.values():
         raise ValueError("No reference temperature!")
-    dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T'])
+    dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T'], dtype=np.float32)
     # Each chunk contains one particle's trajectory
     # To save memory, we will get rid of the time column (assuming all time columns are identical)
     

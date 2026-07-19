@@ -511,7 +511,7 @@ class Potential(object):
         
     def infer_worst_temperature(self, k_BT_max, tolerance=1e-3, k_BT_min=1, n_x=500, max_loops=100):
         """
-        Find the value of T for which d/dT (a_2(T)) = 0 (this will be the 'warm' temperature to select).
+        Find the value of T for which d/dT (a_2(T)) = 0 (this will be the 'warm' temperature to select) using golden selection search.
 
         Parameters
         ----------
