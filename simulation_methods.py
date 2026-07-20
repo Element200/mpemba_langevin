@@ -122,6 +122,71 @@ def langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, forc
         # Appending to an array is like measurement, and the noise is added in this step.
     return X
 
+def maximally_clipped_langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=50, t=None, uniform_noise=False):
+    """
+    Integrate (the Ito way) the SDE dx = F(x)/gamma * dt + D(x,t)*eta(t), where eta is a normally distributed random number, from t=0 to t=expt_length.
+
+    Parameters
+    ----------
+    x_0 : numeric or vector of numerics
+        Initial position(s) (at t=0). The shape will determine the number of output trajectories.
+    dt : numeric, optional
+        Time interval. The default is 1e-5.
+    gamma : numeric, optional
+        Viscosity. The default is roughly 5.88e-3.
+    expt_length : numeric, optional
+        Time interval to integrate over. The default is 6e-2.
+    force : vectorised function, optional
+        Vectorised function, deterministic term. The default is F(x)=-x.
+    temperature_function : function, optional
+        For time-varying quenches, the dimensionless function (scaled by k_BT_b) describing how the bath temperature evolves. The default is lambda t: 1, which is an instantaneous quench.
+    k_BT_b : numeric, optional
+        Equilibrium temperature. The default is 1.
+    measurement_noise_std : numeric, optional
+        Measurement noise standard deviation. The default is 0.
+    uniform_noise : bool, optional
+        Draw artificial noise from a uniform distro U[-sqrt(3)*sigma, sqrt(3)*sigma] instead of a normal distro (sqrt(3) matches the variances).
+
+    Returns
+    -------
+    x : 2D vector of shape (expt_length//dt, *x_0.shape). 
+        If x_0 is 1D, this is a 2D array with the first axis corresponding to the timestep and the second axis corresponding to the 'particle number' in the trajectory. If x_0 is a single numeric, x will only have one useful dimension corresponding to the timestep. x is a vector of all of the trajectories we get from stochastically integrating the Langevin equation, and forms an ensemble that we can plug into the Ensemble object defined earlier.
+
+    """
+    dx_max = np.abs(clip_force*dt/gamma) # Maximum possible displacement in one timestep
+    # if type(x_0) != np.array:
+    #     x_0 = np.array([x_0])
+    num_particles = x_0.shape[0]
+    if t is None:
+        t = np.arange(0,expt_length, dt)
+    timesteps = len(t)
+    initial_measurement_noise = np.random.normal(0, measurement_noise_std, num_particles).astype(np.float32)
+    x_i = x_0 # "true" position
+    X_i = x_0.copy()+initial_measurement_noise # Measured position (which has measurement noise)
+    X = np.zeros((*x_0.shape, timesteps), dtype=np.float32) # Preallocating space and mutating the array is more efficient than appending
+    X[...,0] = X_i.copy() # We can only measure the measured position, not the true position (you may have guessed this from the name)
+    D_b = k_BT_b/gamma # Bath diffusivity
+    thermal_displacement = np.random.normal(0,np.sqrt(2*D_b*dt), size=(*x_0.shape, timesteps)).astype(np.float32)
+    D_imposed = k_BT_b*(temperature_function(t)-1)/gamma
+    imposed_noise_std = np.sqrt(2*D_imposed*dt)
+    if uniform_noise:
+        imposed_displacement = np.random.uniform(-np.sqrt(3)*imposed_noise_std,np.sqrt(3)*imposed_noise_std, size=(*x_0.shape, timesteps)).astype(np.float32)
+    else:
+        imposed_displacement = np.random.normal(0,imposed_noise_std, size=(*x_0.shape, timesteps)).astype(np.float32) # Precalculate the noise terms we will use in the integral -- speeds up code. One array of noise (same shape as x_0) is needed per timestep. 
+    if measurement_noise_std != 0:
+        measurement_noise = np.random.normal(0, measurement_noise_std, size=imposed_displacement.shape)
+    else:
+        measurement_noise = trivial_iterable(0) # trivial_iterable always returns zero when any index is passed to it. This saves a ton of memory since you don't need like a 500 MB array of zeroes
+    # max_displacement_arr = dx_max*np.ones_like(imposed_displacement[...,0])
+    for i in tqdm(range(1, timesteps)): # tqdm for progress bar
+        # We try to minimise indexing within the hot loop
+        dx_dir = np.random.choice([-1,1], size=x_0.shape)
+        x_i = x_i + thermal_displacement[..., i] + dx_dir*dx_max # np.where(np.abs(dx) <= dx_max, dx, np.sign(dx)*max_displacement_arr) # If the displacement is possible given the maximum force, use that for the integration; otherwise use dx_max
+        X_i = x_i + measurement_noise[...,i]
+        X[...,i] = X_i # 'Append' to the preallocated array
+        # Appending to an array is like measurement, and the noise is added in this step.
+    return X
+
 def langevin_simulation_virtualPotential(x_0, dt=dt, gamma=1/150, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, t=None):
     """
     Integrate (the Ito way) the SDE dx = F(x)/gamma * dt + D(x,t)*eta(t), where eta is a normally distributed random number, from t=0 to t=expt_length.
@@ -181,7 +246,7 @@ def langevin_simulation_virtualPotential(x_0, dt=dt, gamma=1/150, expt_length = 
         # Appending to an array is like measurement, and the noise is added in this step.
     return X
 
-def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = None, num_allowed_initial_positions=100_000, dt=1e-5, expt_length=1e-1, save_memory = True, gamma=gamma, transformed_time=False, k_BT_b=1, measurement_noise_std=0, initial_position_tolerance=0, use_virtual_potential=False, clip_force=np.inf, uniform_noise=False):
+def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = None, num_allowed_initial_positions=100_000, dt=1e-5, expt_length=1e-1, save_memory = True, gamma=gamma, transformed_time=False, k_BT_b=1, measurement_noise_std=0, initial_position_tolerance=0, use_virtual_potential=False, clip_force=np.inf, uniform_noise=False, maximal_clipping=False):
     """
     Simulate the experiment in Bechhoefer and Kumar (2020) by choosing an initial position from a Boltzmann distribution and integrating the Langevin equation that it corresponds to.
 
@@ -220,6 +285,8 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = No
     # potential_params ordering: [E_barrier, E_tilt, F_left, x_well, x_min,x_max,force_asymmetry]
     if use_virtual_potential:
         simulation_function = langevin_simulation_virtualPotential
+    elif maximal_clipping:
+        simulation_function = maximally_clipped_langevin_simulation
     else:
         simulation_function = langevin_simulation
     if quench_protocol is None:

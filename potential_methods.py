@@ -452,7 +452,7 @@ class Potential(object):
         plt.semilogx(k_BTs, a_2s)
         return None
     
-    def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, tolerance=1e-3, k_BT_min=1, n_x=500, max_loops=50):
+    def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, tolerance=1e-5, k_BT_min=1, n_x=500, max_loops=50):
         """
         Check if a fast Mpemba effect exists and if so, find the temperature at which it occurs by binary searching for the temperature where the a_2 coefficient goes to zero.
 
@@ -509,7 +509,7 @@ class Potential(object):
         #     print("No strong Mpemba effect detected.")
         #     return None
         
-    def infer_worst_temperature(self, k_BT_max, tolerance=1e-3, k_BT_min=1, n_x=500, max_loops=100):
+    def infer_worst_temperature(self, k_BT_max, tolerance=1e-5, k_BT_min=1, n_x=500, max_loops=100):
         """
         Find the value of T for which d/dT (a_2(T)) = 0 (this will be the 'warm' temperature to select) using golden selection search.
 

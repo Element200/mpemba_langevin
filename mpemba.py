@@ -155,7 +155,7 @@ class Ensemble(object):
         self.expt_length = data.shape[-1]*dt # The last axis must be the timesteps
         data['t'] = np.round(data['t'], 5) # Round all values to five decimal places to avoid annoying floating point bugs
         self.times = data['t']
-        self.bins, self.heights = None, None
+        self.pdfs = None
         self.distances = None
         self.p_values = None
         self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
@@ -195,22 +195,21 @@ class Ensemble(object):
 
         """
         # returns an array of histograms 
-        if (not (self.heights is None and self.bins is None)) and (not regenerate):
-            return self.bins, self.heights # Don't do all this work if you've already done it before
+        if (not (self.pdfs is None)) and (not regenerate):
+            return self.pdfs # Don't do all this work if you've already done it before
         
         # binned_active_domain = np.linspace(x_min, x_max, bins) # In principle you should use binned_active_domains for computations but it's possible that the particles leave the box, in which case histogramming should be done over the full range of possible positions to avoid bugs.
         if (x_min is None) and (x_max is None): # Both must be None
-            global_min = np.min(self.data).data
-            global_max = np.max(self.data).data
+            global_min = np.min(self.data.loc[...,0:]).data
+            global_max = np.max(self.data.loc[...,0:]).data
             if symmetric_domain:
                 extent = np.abs([global_min, global_max]).max()
                 self.global_min = -extent
                 self.global_max = extent
-                binned_active_range = np.linspace(-extent, extent, num_bins)
             else:
                 self.global_min = global_min
                 self.global_max = global_max
-                binned_active_range = np.linspace(self.global_min, self.global_max, num_bins)
+            binned_active_range = np.linspace(self.global_min, self.global_max, num_bins)
             self.dx = binned_active_range[1]-binned_active_range[0]
             heights = histogram_function(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max])) # Using numba-optimised code speeds things up by 2-3x
         else:
@@ -244,9 +243,9 @@ class Ensemble(object):
             CDF value at each bin, for each temperature, for each timestep.
 
         """
-        bins, heights = self.get_histograms(**kwargs)
-        CDFs = self.dx*heights.cumsum(axis=axis)
-        return bins, CDFs
+        pdfs = self.get_histograms(**kwargs)
+        CDFs = self.dx*pdfs.cumsum(axis=axis)
+        return pdfs.x, CDFs
     
     def trajectories_outside_box(self, k_BT=None, limits=None):
         """
@@ -324,11 +323,13 @@ class Ensemble(object):
         if temperature is None:
             temperature = self.temperatures[0]
         equilibration_data = self.data.loc[temperature,:,-equilibration_time:0].to_numpy().flatten() # This will produce weird AF results if you're not using an ensemble with equilibration data intact
-        low_noise_pdf, bins = np.histogram(equilibration_data, bins=self.pdfs.x)
+        low_noise_pdf, bins = np.histogram(equilibration_data, bins=100, density=True)
+        bins_dx = bins[1]-bins[0]
+        bins = bins[:-1]-bins_dx/2
         if plot:
-            plt.bar(self.pdfs.x, low_noise_pdf, width=self.dx)
+            plt.bar(bins, low_noise_pdf, width=bins_dx)
             x = self.potential.mesh(500)
-            plt.plot(x, self.potential.boltzmann(x, temperature))
+            plt.plot(x, self.potential.boltzmann(x, temperature), 'g')
         return low_noise_pdf
     
     def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3), use_true_distro=False, symmetric_domain = False, k_BT_b=1, **kwargs_for_steady_state_inference):
@@ -357,7 +358,7 @@ class Ensemble(object):
 
         """
         pdfs = self.get_histograms(num_bins=num_bins, regenerate=regenerate, symmetric_domain=symmetric_domain) # Generate the variables we need
-        bins = pdfs.x
+        bins = pdfs.x.to_numpy()
         if eqbm_boltzmann_distro is None:
             if use_true_distro:
                 eqbm_boltzmann_distro = self.potential.boltzmann_PMF(bins, k_BT=k_BT_b)/self.dx # Turn PMF into PDF
@@ -660,7 +661,7 @@ class Ensemble(object):
         plt.show()
         return None
 
-    def plot_histograms(self, init=0, mid=341e-5, end=5000e-5, plot_init=True, plot_end=True, num_bins=100, plot_symmetrised_histograms=False, print_chisq=False):
+    def plot_histograms(self, init=0, mid=341e-5, end=5000e-5, plot_init=True, plot_end=True, plot_symmetrised_histograms=False, print_chisq=False, **kwargs_for_get_histograms):
         """
         Plot a bunch of things just to verify that everything's working properly. Also return the variables we plot just in case we want to manipulate them somehow.
 
@@ -676,8 +677,6 @@ class Ensemble(object):
             Plot the predicted Boltzmann distribution at t=0
         plot_fin : bool, optional
             Plot the predicted Boltzmann distribution at t -> inf
-        num_bins : int, optional
-           Number of bins in the histogram. Default is 100.
         plot_symmetrised_histograms : bool
             For the symmetrisation Mpemba experiments. If true, plots the 'twirled' G[p(x,t)] = (p(x,t)+p(-x,t))/2. Default is False
         print_chisq : bool
@@ -689,8 +688,8 @@ class Ensemble(object):
             Heights at t = init, mid, and end.
         """
         plt.close()
-        pdfs = self.get_histograms(num_bins=num_bins)
-        bins = pdfs.x
+        pdfs = self.get_histograms(**kwargs_for_get_histograms)
+        bins = pdfs.x.to_numpy()
         heights_init = pdfs.loc[...,init]
         heights_mid = pdfs.loc[...,mid]
         heights_end = pdfs.loc[...,end]
