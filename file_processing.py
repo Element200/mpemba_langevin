@@ -131,6 +131,7 @@ def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','
             chunks.append(chunk) # Avoid adding a trajectory if there's some weirdness in the chunk splitting that causes nonuniformity.
 
     chunks = np.array(chunks) # This is always the step that breaks if you have data with uneven column sizes.
+    
     data_cols = list(dataframe.columns)
     cols_to_extract = {col: data_cols.index(col) for col in data_cols if (not col in ['t','state', 'T'])} # We extract all of the columns except for time, state, and temperature
     t_index = data_cols.index('t') # Get index of the time column
@@ -153,9 +154,9 @@ def extract_file_data(filename, dt=1e-5, column_names=['x','t','drift','state','
     data = xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': sorted_temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
     return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
 
-def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','state','force','eta','T'], cols_to_extract= ['x'], temperatures = {0: 12, 1: 3, 2: 1}, k_BT_b=1, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}, positioning_time=3e-2, fast_load=True):
+def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','state','force','eta','T'], cols_to_extract= ['x'], temperatures = {0: 12, 1: 3, 2: 1}, k_BT_b=1, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}, positioning_time=3e-2):
     """
-    Extracts *both* the heating ("positioning", using noise instead of initial PDFs) and cooling ("protocol") steps. Assumes the positioning step is fixed-size; thus this code only works with Mpemba_Exp_Sane_v10 and later.
+    Extracts *both* the heating ("positioning", using noise instead of initial PDFs) and cooling ("protocol") steps. Assumes the positioning step is fixed-size; thus this code only works with Mpemba_Exp_Sane_v8 and later. I've optimised this code to use the polars library for fast table reading and not use pandas. 
 
     Parameters
     ----------
@@ -172,7 +173,7 @@ def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','s
     k_BT_b : numeric, optional
         Bath temperature. The default is 1. You're probably never going to set this to anything other than 1 but it's there if you need it.
     positioning_time : numeric, optional
-        The time allowed for the positioning step in the same units as dt. The default is 3e-2
+        The time allowed for the positioning step in the same units as dt. The default is 3e-2.
 
     Returns
     -------
@@ -180,38 +181,44 @@ def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','s
     """
     if not k_BT_b in temperatures.values():
         raise ValueError("No reference temperature!")
-    if fast_load:
-        df = (pl.scan_csv(filename, separator='\t', has_header=False, new_columns=column_names)
-        .select([*cols_to_extract, 't', 'state', 'T']) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
-        .collect(engine='streaming'))# Chunk and speed up 
-        dataframe = df.to_pandas()
-    else:
-        dataframe = pd.read_table(filename, names=column_names, usecols=[*cols_to_extract,'t','state','T'])
+    usecols = [*cols_to_extract, 'state', 'T']
+    df = (pl.scan_csv(filename, separator='\t', has_header=False, new_columns=column_names)
+    .select(usecols) # We need 't' and 'state' to properly split the data; we need 'T' to figure out how to split the data further
+    .with_columns([pl.col(c).cast(pl.Float32) for c in usecols])  # explicit dtype avoids upcast on to_numpy()
+    .collect(engine='streaming'))# Chunk and speed up 
+    arr = df.to_numpy()
     # Each chunk contains one particle's trajectory
     # To save memory, we will get rid of the time column (assuming all time columns are identical)
     
-    masked_data = dataframe[dataframe['state']!=states['calibration']] # THIS WILL BREAK if the positioning step is not fixed-size. We're also assuming that there are only THREE states.
-    forward = dataframe[1:].reset_index(drop=True)
-    state_transitions = (forward['state']==states['calibration']) & (dataframe['state']==states['protocol'])
-    pivots = dataframe[state_transitions].index + 1
-    chunks = []
-    expected_length = len(masked_data.loc[pivots[0]:pivots[1]])
-    for i in range(len(pivots)-1):
-        chunk = masked_data.loc[pivots[i]:pivots[i+1]]
+    state_index = usecols.index('state')
+    state_arr = arr[:,state_index]
+    state_transitions = (state_arr[1:] == states['calibration']) & (state_arr[:-1] == states['protocol'])
+    # mask = (state_arr!=states['calibration']) # THIS WILL BREAK if the positioning step is not fixed-size. We're also assuming that there are only THREE states.
+    # masked_arr = arr[mask]
+    pivots = np.flatnonzero(state_transitions)+1
+    # pivot_positions = np.searchsorted(masked_positions, pivots)  # position of each pivot *within* masked_array
+    chunks_list = []
+    expected_length = len(arr[pivots[0]:pivots[1]])
+    for i in tqdm(range(len(pivots)-1), "Chunking data..."):
+        chunk = arr[pivots[i]:pivots[i+1],:]
         if len(chunk) == expected_length:
-            chunks.append(chunk) # Avoid adding a trajectory if there's some weirdness in the chunk splitting that causes nonuniformity.
-
-    chunks = np.array(chunks) # This is always the step that breaks if you have data with uneven column sizes.
-    data_cols = list(dataframe.columns)
-    cols_to_extract = {col: data_cols.index(col) for col in data_cols if (not col in ['t','state', 'T'])} # We extract all of the columns except for time, state, and temperature
-    t_index = data_cols.index('t') # Get index of the time column
-    T_index = data_cols.index('T') # Get index of temperature column
+            chunks_list.append(chunk) # Avoid adding a trajectory if there's some weirdness in the chunk splitting that causes nonuniformity.
+    unmasked_chunks = np.array(chunks_list) # This is always the step that breaks if you have data with uneven column sizes.
+    del chunks_list, arr # Free up memory
     
-    temp_index = list(set(dataframe['T'])) # Get all unique temperature indices
+    mask = np.flatnonzero((unmasked_chunks[:,:,state_index] != states['calibration'])[1,:]) # This assumes that the time to 'heat' and 'cool' are uniform
+    new_usecols = [usecols.index(col) for col in usecols if (col != 'state')]
+    cols_to_extract = {column_names[col]: new_usecols.index(col) for col in new_usecols if (not col == usecols.index('T'))} # We extract all of the columns except for time, state, and temperature
+    chunks = unmasked_chunks[:,mask,:][:,:,np.array(new_usecols)] # We don't need state variable after chunking.
+    # t_index = data_cols.index('t') # Get index of the time column
+    # print(chunks.shape)
+    T_index = usecols.index('T')-1 # Get index of temperature column. Subtract 1 because we dropped the state column
+    
+    temp_index = np.unique(chunks[:,0,T_index]) # Get all unique temperature indices
     sorted_temperatures = [temperatures[temp] for temp in temp_index]
     num_protocols = np.inf
     split_chunks = []
-    for T in temp_index:
+    for T in tqdm(temp_index, "Splitting temperatures..."):
         split_chunk = np.where((chunks[...,T_index]==T)[...,np.newaxis], chunks, np.nan) # [...,np.newaxis] needed so dimensions are comparable
         mask = ~np.all(np.isnan(split_chunk), axis=tuple(range(1, split_chunk.ndim)))
         # Allows us to mask our data without losing dimensional info
@@ -219,9 +226,12 @@ def heating_cycle_extraction(filename, dt=1e-5, column_names=['x','t','drift','s
         if num_protocols > len(split_chunk[mask]):
             num_protocols = len(split_chunk[mask])
     adjusted_chunks = np.array([split_chunks[i][:num_protocols,:] for i,T in enumerate(temp_index)])
-    times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical.
-    positioning_index = int(positioning_time//dt)
-    times -= times[positioning_index] # State transitions at t=0.
+    # times = adjusted_chunks[0,0,:,t_index]*dt # Assumes all time columns are identical.
+    # positioning_index = int(positioning_time//dt)
+    times = np.round(np.arange(adjusted_chunks.shape[2])*dt-positioning_time, decimals=6) # State transitions at t=0. Round to avoid weird indexing bugs.
+    print(times)
+    print(adjusted_chunks[...,cols_to_extract[
+    'x']])
     data = xr.Dataset(data_vars={col: (['T', 'n','t'],adjusted_chunks[...,cols_to_extract[col]]) for col in cols_to_extract.keys()}, coords={'t':times, 'T': sorted_temperatures}) # Throw away the voltage and time data (time is redundant between all chunks) and also state data (because we filtered it so it's all =state_to_extract)
     return data.sortby("T", ascending=False) # Sort temperatures in descending order so that future processing steps aren't confused.
     
@@ -438,12 +448,6 @@ def load_processed_data(filenames, temperatures={0: 1000,1: 12,2: 1}):
     t = data[-1].columns # Assumes the time columns are all the same
     da = xr.DataArray(data, dims=('T', 'n', 't'), coords = {'T': sorted_temperatures, 't':t})
     return da.sortby('T', ascending=False)
-
-def quick_processing(directory, file, k_BTs, cols_to_extract=['x'], column_names = ['x','t','drift','state','F','x0','T'], processed_csv_suffix='_converted', dt=1e-5, k_BT_b=1):
-    filename = directory + file + ".txt"
-    converted_filename = lambda temp: directory + file + processed_csv_suffix + str(temp) + ".csv"
-    if converted_filename(1.0) in os.listdir(directory):
-        data = load_processed_data([converted_filename(temp) for temp in k_BTs.values()], temperatures = k_BTs)
 
 def chunk_splitter_deprecated(dataframe, dt=1e-5, state_to_extract='protocol', state_phase_lag=0, states = {'calibration' : 0, 'positioning' : 1, 'protocol' : 2}):
     """

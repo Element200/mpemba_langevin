@@ -325,7 +325,7 @@ class Ensemble(object):
         equilibration_data = self.data.loc[temperature,:,-equilibration_time:0].to_numpy().flatten() # This will produce weird AF results if you're not using an ensemble with equilibration data intact
         low_noise_pdf, bins = np.histogram(equilibration_data, bins=100, density=True)
         bins_dx = bins[1]-bins[0]
-        bins = bins[:-1]-bins_dx/2
+        bins = bins[:-1]+bins_dx/2
         if plot:
             plt.bar(bins, low_noise_pdf, width=bins_dx)
             x = self.potential.mesh(500)
@@ -963,6 +963,21 @@ def backwards_cumulative_max(data, axis=0):
     cummaxed_data = np.flip(cummaxed_reverse, axis=axis) # After cummaxing the reversed data, flip it again so the ordering is correct
     return cummaxed_data
 
-if __name__ == '__main__':
-    import os
-    os.chdir("..")
+def quick_processing(directory, file, potential, k_BTs, cols_to_extract=['x'], column_names = ['x','t','drift','state','F','x0','T'], processed_csv_suffix='_converted_T=', dt=1e-5, k_BT_b=1, positioning_time=3e-2):
+    filename = directory + file + ".txt"
+    converted_filename = lambda temp: directory + file + processed_csv_suffix + str(temp) + ".csv"
+    if converted_filename(1.0) in os.listdir(directory):
+        print("Processed files found!")
+        data = file_processing.load_processed_data([converted_filename(temp) for temp in k_BTs.values()], temperatures = k_BTs)
+        ensemble = Ensemble(data, potential)
+    else:
+        print("No processed files found. Chunking raw data...")
+        data = file_processing.heating_cycle_extraction(filename, dt=dt, column_names=column_names, cols_to_extract=cols_to_extract, temperatures=k_BTs, k_BT_b=k_BT_b, positioning_time=positioning_time)
+        ensemble = Ensemble(data, potential)
+        ensemble.export_data([directory+filename+processed_csv_suffix(T) for T in k_BTs], extension='.csv')
+    
+    
+
+# if __name__ == '__main__':
+#     import os
+#     os.chdir("..")

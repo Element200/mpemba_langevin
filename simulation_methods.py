@@ -56,7 +56,7 @@ def inverse_transform_sampler(num_samples, CDF, interpolation_mesh_size=100, n_x
     return CDF_inv(uniform_samples)
     
 
-def langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=np.inf, t=None, uniform_noise=False):
+def langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=np.inf, t=None, uniform_noise=False, binary_noise=False):
     """
     Integrate (the Ito way) the SDE dx = F(x)/gamma * dt + D(x,t)*eta(t), where eta is a normally distributed random number, from t=0 to t=expt_length.
 
@@ -105,6 +105,8 @@ def langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, forc
     imposed_noise_std = np.sqrt(2*D_imposed*dt)
     if uniform_noise:
         imposed_displacement = np.random.uniform(-np.sqrt(3)*imposed_noise_std,np.sqrt(3)*imposed_noise_std, size=(*x_0.shape, timesteps)).astype(np.float32)
+    if binary_noise:
+        imposed_displacement = np.random.choice([-imposed_noise_std,imposed_noise_std], size=(*x_0.shape, timesteps)).astype(np.float32)
     else:
         imposed_displacement = np.random.normal(0,imposed_noise_std, size=(*x_0.shape, timesteps)).astype(np.float32) # Precalculate the noise terms we will use in the integral -- speeds up code. One array of noise (same shape as x_0) is needed per timestep. 
     if measurement_noise_std != 0:
@@ -390,7 +392,7 @@ def run_asymmetry_mpemba_simulations(p_0s, num_particles, potential, num_allowed
     results = np.array(results, dtype=np.float32) # Change to single-precision floating point to save some memory 
     return xr.DataArray(results, coords = [('T', range(len(p_0s))), ('n', np.arange(0,num_particles,1)),('t', times)])
 
-def heating_cycle_mpemba_simulation(k_BTs, num_particles, potential, quench_protocol = None, dt=1e-5, expt_length=1e-1, heating_time = 3e-2, gamma=gamma, k_BT_b=1, measurement_noise_std=0, use_virtual_potential=False, clip_force=np.inf, initial_trap_constant=25, uniform_noise=False):
+def heating_cycle_mpemba_simulation(k_BTs, num_particles, potential, quench_protocol = None, dt=1e-5, expt_length=1e-1, heating_time = 3e-2, gamma=gamma, k_BT_b=1, measurement_noise_std=0, use_virtual_potential=False, clip_force=np.inf, initial_trap_constant=25, uniform_noise=False, binary_noise=False):
     """
     Simulate the experiment in Bechhoefer and Kumar (2020) by choosing an initial position from a Boltzmann distribution and integrating the Langevin equation that it corresponds to.
 
