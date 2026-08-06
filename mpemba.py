@@ -656,9 +656,10 @@ class Ensemble(object):
         if temp is None: temp = self.data['T'][0]
         _ = self.get_histograms() # generate global_min and global_max
         plt.plot(self.times, self.data.loc[temp, np.random.choice(self.N, num_trajectories),:].T)
-        plt.plot([0,self.expt_length/self.dt],[[self.potential.x_min,self.potential.x_max], [self.potential.x_min, self.potential.x_max]], 'r')
-        plt.plot([0,self.expt_length/self.dt],[[self.global_min,self.global_max], [self.global_min,self.global_max]], 'g')
-        plt.show()
+        plt.plot([self.times.min(), self.times.max()],[[self.potential.x_min,self.potential.x_max], [self.potential.x_min, self.potential.x_max]], 'r')
+        plt.plot([self.times.min(),self.times.max()],[[self.global_min,self.global_max], [self.global_min,self.global_max]], 'g')
+        plt.xlabel("t")
+        plt.ylabel("x")
         return None
 
     def plot_histograms(self, init=0, mid=341e-5, end=5000e-5, plot_init=True, plot_end=True, plot_symmetrised_histograms=False, print_chisq=False, **kwargs_for_get_histograms):
@@ -747,7 +748,7 @@ class Ensemble(object):
         cbar.set_label(r'$p(x,t)$')
         ax[-1].set_xlabel(r"$t$")
         return None
-    def animate(self, T=None, num_bins=30, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100, max_left=-1, max_right=3, plot_initial_distro=True):
+    def animate(self, T=None, num_bins=30, num_animated_frames = 500, set_const_height = True, use_log_time=True, frame_decay_const = 100, max_left=-1, max_right=3, plot_initial_distro=True, override_height=None):
         """
         Animate p(x,t).
 
@@ -786,8 +787,11 @@ class Ensemble(object):
         all_heights = self.get_histograms(num_bins=num_bins).to_numpy()
         bins = self.pdfs.x
         T_index = list(self.data['T'].to_numpy()).index(T) # Get the index of the desired temperature
-        patches = ax.bar(bins, all_heights[0,:,0].to_numpy()/self.N, width=bins[1]-bins[0])
-        ax_height = np.max(binned_final_distro + 0.02)
+        patches = ax.bar(bins, all_heights[T_index,:,0], width=bins[1]-bins[0], color='g', alpha=0.3)
+        if override_height is None:
+            ax_height = np.max(binned_final_distro + 0.02)
+        else:
+            ax_height = np.max(override_height)
         ax.set_ylim(0,ax_height)
         
         exponential_frame_func = lambda x, x_0: (self.expt_length/self.dt)*(np.exp(x/x_0)-1)/(np.exp(num_animated_frames/x_0)-1) # Function to pick out a large number of frames in the beginning and a small number of frames in the end
@@ -802,13 +806,13 @@ class Ensemble(object):
         ax.set_ylabel("p(x,t)")
         if plot_initial_distro:
             ax.plot(fine_active_range, binned_initial_distro, 'r')
-        ax.plot(fine_active_range, binned_final_distro, 'g')
+        ax.plot(fine_active_range, binned_final_distro, 'k')
         ax.set_title(r"t = 0 $\mu$s")
         
         # Update function for the animation
         def update(frame_number):
             # Get the data for the current frame
-            heights, _ = all_heights[T_index,:,frame_number-1], bins
+            heights, _ = all_heights[T_index,:,min(frame_number, int(self.times[-1]//self.dt-1))], bins
             # Update the histogram data
             for i in range(len(patches)):
                 patches[i].set_height(heights[i])
@@ -821,8 +825,7 @@ class Ensemble(object):
             return patches
         
         # Create the animation
-        ani = animation.FuncAnimation(fig, update, frames=animated_frames, interval=10, blit=False, cache_frame_data=True)
-        plt.show()
+        ani = animation.FuncAnimation(fig, update, frames=animated_frames, interval=20, blit=False, cache_frame_data=True)
         return ani
     
     def compare_to_simulations(self, D, **other_kwargs_for_simulations):

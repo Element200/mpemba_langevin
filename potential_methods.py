@@ -87,6 +87,8 @@ class Potential(object):
         if plot_range is None:
             plot_range = np.linspace(self.x_min, self.x_max, 50)
         plt.plot(plot_range, self.U(plot_range), color)
+        plt.ylabel('U(x)')
+        plt.xlabel('x')
         return None
     def plot_force(self, plot_range=None, color='c'):
         """
@@ -450,6 +452,8 @@ class Potential(object):
         k_BTs = np.logspace(0, np.log(k_BT_max)/np.log(10), n_T)
         a_2s = self.a_k_boltzmannIC(k_BTs, n_x=n_x, k=k)
         plt.semilogx(k_BTs, a_2s)
+        plt.xlabel("$T$")
+        plt.ylabel(r"$a_2(T)$")
         return None
     
     def infer_fast_mpemba_effect(self, k_BT_max, n_T = 100, tolerance=1e-5, k_BT_min=1, n_x=500, max_loops=50):

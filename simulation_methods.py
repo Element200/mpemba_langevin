@@ -27,14 +27,6 @@ except ImportError:
     raise ImportError
 
 
-dt = 1e-5
-expt_length = 6e-2
-F = lambda x: -x
-x_min = -1
-x_max = 3
-D = 150 # px^2/s
-k_BT_b = 1
-gamma = k_BT_b/D #0.02
 E_barrier,E_tilt, F_left, x_well, force_asymmetry = 2,1.3,50,0.5,1 # for testing purposes
 
 class trivial_iterable(object):
@@ -56,7 +48,7 @@ def inverse_transform_sampler(num_samples, CDF, interpolation_mesh_size=100, n_x
     return CDF_inv(uniform_samples)
     
 
-def langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=np.inf, t=None, uniform_noise=False, binary_noise=False):
+def langevin_simulation(x_0, dt=1e-5, gamma=1/150, expt_length = 6e-2, force = None, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=np.inf, t=None, uniform_noise=False, binary_noise=False):
     """
     Integrate (the Ito way) the SDE dx = F(x)/gamma * dt + D(x,t)*eta(t), where eta is a normally distributed random number, from t=0 to t=expt_length.
 
@@ -124,7 +116,7 @@ def langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, forc
         # Appending to an array is like measurement, and the noise is added in this step.
     return X
 
-def maximally_clipped_langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=50, t=None, uniform_noise=False):
+def maximally_clipped_langevin_simulation(x_0, dt=1e-5, gamma=1/150, expt_length = 6e-2, force = None, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=50, t=None, uniform_noise=False):
     """
     Integrate (the Ito way) the SDE dx = F(x)/gamma * dt + D(x,t)*eta(t), where eta is a normally distributed random number, from t=0 to t=expt_length.
 
@@ -189,7 +181,7 @@ def maximally_clipped_langevin_simulation(x_0, dt=dt, gamma=1/150, expt_length =
         # Appending to an array is like measurement, and the noise is added in this step.
     return X
 
-def langevin_simulation_virtualPotential(x_0, dt=dt, gamma=1/150, expt_length = expt_length, force = F, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, t=None):
+def langevin_simulation_virtualPotential(x_0, dt=1e-5, gamma=1/150, expt_length = 6e-2, force = None, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, t=None):
     """
     Integrate (the Ito way) the SDE dx = F(x)/gamma * dt + D(x,t)*eta(t), where eta is a normally distributed random number, from t=0 to t=expt_length.
 
@@ -248,7 +240,7 @@ def langevin_simulation_virtualPotential(x_0, dt=dt, gamma=1/150, expt_length = 
         # Appending to an array is like measurement, and the noise is added in this step.
     return X
 
-def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = None, num_allowed_initial_positions=100_000, dt=1e-5, expt_length=1e-1, save_memory = True, gamma=gamma, transformed_time=False, k_BT_b=1, measurement_noise_std=0, initial_position_tolerance=0, use_virtual_potential=False, clip_force=np.inf, uniform_noise=False, maximal_clipping=False):
+def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = None, num_allowed_initial_positions=100_000, dt=1e-5, expt_length=1e-1, save_memory = True, gamma=1/150, transformed_time=False, k_BT_b=1, measurement_noise_std=0, initial_position_tolerance=0, use_virtual_potential=False, clip_force=np.inf, uniform_noise=False, maximal_clipping=False):
     """
     Simulate the experiment in Bechhoefer and Kumar (2020) by choosing an initial position from a Boltzmann distribution and integrating the Langevin equation that it corresponds to.
 
@@ -335,7 +327,7 @@ def run_mpemba_simulations(k_BTs, num_particles, potential, quench_protocol = No
         
     return xr.DataArray(results, coords = [('T', k_BTs), ('n', np.arange(0,num_particles,1)),('t', times)])
 
-def run_asymmetry_mpemba_simulations(p_0s, num_particles, potential, num_allowed_initial_positions=100_000, dt=1e-5, expt_length=1e-1, gamma=gamma, k_BT_b=1, measurement_noise_std=0, initial_position_tolerance=0, x_0=None):
+def run_asymmetry_mpemba_simulations(p_0s, num_particles, potential, num_allowed_initial_positions=100_000, dt=1e-5, expt_length=1e-1, gamma=1/150, k_BT_b=1, measurement_noise_std=0, initial_position_tolerance=0, x_0=None):
     """
     
 
@@ -392,7 +384,7 @@ def run_asymmetry_mpemba_simulations(p_0s, num_particles, potential, num_allowed
     results = np.array(results, dtype=np.float32) # Change to single-precision floating point to save some memory 
     return xr.DataArray(results, coords = [('T', range(len(p_0s))), ('n', np.arange(0,num_particles,1)),('t', times)])
 
-def heating_cycle_mpemba_simulation(k_BTs, num_particles, potential, quench_protocol = None, dt=1e-5, expt_length=1e-1, heating_time = 3e-2, gamma=gamma, k_BT_b=1, measurement_noise_std=0, use_virtual_potential=False, clip_force=np.inf, initial_trap_constant=25, uniform_noise=False, binary_noise=False):
+def heating_cycle_mpemba_simulation(k_BTs, num_particles, potential, quench_protocol = None, dt=1e-5, expt_length=1e-1, heating_time = 3e-2, gamma=1/150, k_BT_b=1, measurement_noise_std=0, use_virtual_potential=False, clip_force=np.inf, initial_trap_constant=25, uniform_noise=False, binary_noise=False):
     """
     Simulate the experiment in Bechhoefer and Kumar (2020) by choosing an initial position from a Boltzmann distribution and integrating the Langevin equation that it corresponds to.
 
