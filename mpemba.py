@@ -14,6 +14,7 @@ import matplotlib.animation as animation
 import scipy
 from tqdm import tqdm
 import sympy as sym
+import polars as pl
 import pandas as pd
 import os
 import numba
@@ -159,6 +160,7 @@ class Ensemble(object):
         self.distances = None
         self.p_values = None
         self.mesh = lambda n: np.linspace(self.x_min, self.x_max, n)
+        self.includes_heating = (self.data['t'] < 0).to_numpy().any() # Flag to check whether the ensemble contains the heating cycle.
         
         return None
     def __add__(self, other):
@@ -213,6 +215,10 @@ class Ensemble(object):
             self.dx = binned_active_range[1]-binned_active_range[0]
             heights = histogram_function(self.data.to_numpy(), num_bins=num_bins-1, bin_range=np.array([self.global_min, self.global_max])) # Using numba-optimised code speeds things up by 2-3x
         else:
+            if not histogram_function == slow_histogram:
+                print("Switching histogram function to slow_histogram to avoid kernel crash...")
+            histogram_function = slow_histogram # Trying to use fast_histogram with data that does not fall nicely into any bins will cause your kernel to crash, which is really fucking annoying.
+            
             binned_active_range = np.linspace(x_min, x_max, num_bins)
             self.global_min, self.global_max = x_min, x_max
             self.dx = binned_active_range[1]-binned_active_range[0]
@@ -319,18 +325,71 @@ class Ensemble(object):
         cold_histogram, _ = np.histogram(cold_data, bins=num_bins, range=bin_range, density=True)
         return np.array(cold_histogram)
     
-    def check_for_clipping(self, temperature = None, distance_function=distance_functions.L1, plot=True, equilibration_time=1e-2, num_bins=100, **kwargs_for_histograms):
+    def infer_initial_state(self, temperature = None, plot=False, equilibration_time=1e-2, bins_arg=100, plot_colour='r', **kwargs_for_histograms):
+        """
+        Bin all of the data in the few timesteps before the protocol begins to .
+
+        Parameters
+        ----------
+        temperature : numeric, optional
+            Which initial histogram to infer. The default is the hottest temperature.
+        plot : bool, optional
+            Whether to plot the histogram. The default is False.
+        equilibration_time : numeric, optional
+            The timestep to begin averaging over. The default is 1e-2.
+        bins_arg : int or vector of numerics, optional
+            Number of bins/bin array to histogram. The default is 100. If set to None, bins_arg will be set to the same bin array used in get_histograms.
+        plot_colour : str, optional
+            Color to plot. The default is 'r' (red).
+        **kwargs_for_histograms=
+
+        Returns
+        -------
+        bins, low_noise_pdf : np.array, np.array of numerics
+            An array containing the centred bins and low-noise pdf values.
+        """
+        assert self.includes_heating, "Protocol does not include the heating cycle!"
         if temperature is None:
             temperature = self.temperatures[0]
+        if bins_arg is None:
+            x = self.pdfs.x
+            bins_arg = np.array(x.to_numpy()-self.dx/2, x[-1]+self.dx/2)
         equilibration_data = self.data.loc[temperature,:,-equilibration_time:0].to_numpy().flatten() # This will produce weird AF results if you're not using an ensemble with equilibration data intact
-        low_noise_pdf, bins = np.histogram(equilibration_data, bins=100, density=True)
+        low_noise_pdf, bins = np.histogram(equilibration_data, bins=bins_arg, density=True)
         bins_dx = bins[1]-bins[0]
         bins = bins[:-1]+bins_dx/2
         if plot:
-            plt.bar(bins, low_noise_pdf, width=bins_dx)
+            plt.bar(bins, low_noise_pdf, width=bins_dx, color=plot_colour, alpha=0.3)
             x = self.potential.mesh(500)
-            plt.plot(x, self.potential.boltzmann(x, temperature), 'g')
-        return low_noise_pdf
+            plt.plot(x, self.potential.boltzmann(x, temperature), color=plot_colour)
+        return bins, low_noise_pdf
+    
+    def infer_initial_potential(self, plot=True, colours = ['r','b','k'], other_kwargs_for_plotting={}, plot_range=[-2,5], range_lims=[-50,175], **kwargs_for_initial_state_inference):
+        inferred_potentials = {}
+        inferred_bins = {}
+        for i, k_BT in enumerate(self.temperatures):
+            bins, low_noise_pdf = self.infer_initial_state(temperature=k_BT, plot=False, **kwargs_for_initial_state_inference)
+            bins_dx = bins[1]-bins[0]
+            if 'equilibration_time' in kwargs_for_initial_state_inference:
+                timesteps = kwargs_for_initial_state_inference['equilibration_time']//self.dt
+            else:
+                timesteps = 1e-2 // self.dt
+            Z, _ = scipy.integrate.quad(lambda x: self.potential._boltzmann_unnormalised(x, k_BT), float(min(bins)), float(max(bins)))
+            inferred_potentials[k_BT] = -k_BT*np.log(low_noise_pdf*Z*bins_dx*self.N)
+            inferred_potentials[k_BT] -= (inferred_potentials[k_BT][np.abs(bins)==np.min(np.abs(bins))])[0] # Try to more or less align the three potentials so that they can be easily compared.
+            low_noise_errors = k_BT/np.sqrt(low_noise_pdf*Z*bins_dx*self.N*timesteps)
+            inferred_bins[k_BT] = bins
+            if plot:
+                mask = np.isfinite(inferred_potentials[k_BT])
+                U_vals = inferred_potentials[k_BT][mask]
+                x_vals = bins[mask]
+                plt.errorbar(x_vals, U_vals, yerr = np.abs(low_noise_errors)[mask], capsize=3, fmt=".", color=colours[i])
+        if plot:
+            x = self.potential.mesh(500)
+            plt.plot(x, self.potential.U(x)-self.potential.U(0), 'g', lw=2)
+            plt.xlim(plot_range)
+            plt.ylim(range_lims)
+        return bins, inferred_potentials
     
     def get_distances(self, eqbm_boltzmann_distro=None, distance_function=distance_functions.L1, num_bins=100, regenerate=False, use_smoothing=False, kernel=np.ones(3), use_true_distro=False, symmetric_domain = False, k_BT_b=1, **kwargs_for_steady_state_inference):
         """
@@ -662,7 +721,7 @@ class Ensemble(object):
         plt.ylabel("x")
         return None
 
-    def plot_histograms(self, init=0, mid=341e-5, end=5000e-5, plot_init=True, plot_end=True, plot_symmetrised_histograms=False, print_chisq=False, **kwargs_for_get_histograms):
+    def plot_histograms(self, init=0, mid=341e-5, end=4999e-5, plot_init=True, plot_end=True, plot_symmetrised_histograms=False, print_chisq=False, **kwargs_for_get_histograms):
         """
         Plot a bunch of things just to verify that everything's working properly. Also return the variables we plot just in case we want to manipulate them somehow.
 
@@ -858,6 +917,8 @@ class Ensemble(object):
             The name of the file to export to. Each file name will have the temperature data on it
         extension : str, optional
             The filetype. Default is csv.
+        fast_saving : bool, optional
+            Flag to indicate whether the polars library should be used instead of pandas to write CSV. Default is True.
 
         Returns
         -------
@@ -865,10 +926,11 @@ class Ensemble(object):
 
         """
         for T in tqdm(self.temperatures):
-            df_T = self.data.loc[T].to_pandas().T # Transpose for cleanliness
-            filename_T = filename + "_T=" + str(T) + ".csv" # Construct the full filename
-            df_T.to_csv(filename_T)
+                df_T = self.data.loc[T].to_pandas().T # Transpose for cleanliness
+                filename_T = filename + "_T=" + str(T) + ".csv" # Construct the full filename
+                df_T.to_csv(filename_T)
         return None
+    
     def export_distances(self, filename, distance_function=distance_functions.L1, eqbm_boltzmann_distro=None):
         """
         Convert the distances into a single csv file.

@@ -481,7 +481,7 @@ class SimpleHarmonic(potential_methods.UnboundedForcePotential):
         return outstring
     def __repr__(self):
         """Do the same schtick as __str__."""
-        return self.__str__
+        return self.__str__()
 # def polynomial_interpolator_with_derivatives(X, Y, derivatives=None):
 #     if derivatives is None:
 #         derivatives = np.zeros_like(Y)

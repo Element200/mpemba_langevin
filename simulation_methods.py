@@ -48,7 +48,7 @@ def inverse_transform_sampler(num_samples, CDF, interpolation_mesh_size=100, n_x
     return CDF_inv(uniform_samples)
     
 
-def langevin_simulation(x_0, dt=1e-5, gamma=1/150, expt_length = 6e-2, force = None, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=np.inf, t=None, uniform_noise=False, binary_noise=False):
+def langevin_simulation(x_0, dt=1e-5, gamma=1/150, expt_length = 6e-2, force = None, temperature_function = lambda t: 1, k_BT_b=1, measurement_noise_std=0, clip_force=np.inf, drift_force=0, t=None, uniform_noise=False, binary_noise=False):
     """
     Integrate (the Ito way) the SDE dx = F(x)/gamma * dt + D(x,t)*eta(t), where eta is a normally distributed random number, from t=0 to t=expt_length.
 
@@ -96,9 +96,9 @@ def langevin_simulation(x_0, dt=1e-5, gamma=1/150, expt_length = 6e-2, force = N
     D_imposed = k_BT_b*(temperature_function(t)-1)/gamma
     imposed_noise_std = np.sqrt(2*D_imposed*dt)
     if uniform_noise:
-        imposed_displacement = np.random.uniform(-np.sqrt(3)*imposed_noise_std,np.sqrt(3)*imposed_noise_std, size=(*x_0.shape, timesteps)).astype(np.float32)
+        imposed_displacement = np.random.uniform(-np.sqrt(3)*imposed_noise_std,np.sqrt(3)*imposed_noise_std, size=(*x_0.shape, timesteps)).astype(np.float32) # U[-sqrt(3)*s, sqrt(3)*s] has same variance as N[0,s]
     if binary_noise:
-        imposed_displacement = np.random.choice([-imposed_noise_std,imposed_noise_std], size=(*x_0.shape, timesteps)).astype(np.float32)
+        imposed_displacement = imposed_noise_std*np.random.choice([-1,1], size=(*x_0.shape, timesteps)).astype(np.float32)
     else:
         imposed_displacement = np.random.normal(0,imposed_noise_std, size=(*x_0.shape, timesteps)).astype(np.float32) # Precalculate the noise terms we will use in the integral -- speeds up code. One array of noise (same shape as x_0) is needed per timestep. 
     if measurement_noise_std != 0:
@@ -110,7 +110,7 @@ def langevin_simulation(x_0, dt=1e-5, gamma=1/150, expt_length = 6e-2, force = N
         # We try to minimise indexing within the hot loop
         deterministic_displacement = force(X_i, i*dt)*dt/gamma # Since we're using feedback forces, the force depends on the *measured* position, which includes measurement noise, not the true position
         dx = deterministic_displacement + imposed_displacement[..., i]
-        x_i = x_i + thermal_displacement[..., i] + np.where(np.abs(dx) <= dx_max, dx, np.sign(dx)*max_displacement_arr) # If the displacement is possible given the maximum force, use that for the integration; otherwise use dx_max
+        x_i = x_i + thermal_displacement[..., i] + np.where(np.abs(dx) <= dx_max, dx, np.sign(dx)*max_displacement_arr) + drift_force*dt/gamma # If the displacement is possible given the maximum force, use that for the integration; otherwise use dx_max. drift_force is independent of the feedback trap so it's applied externally.
         X_i = x_i + measurement_noise[...,i]
         X[...,i] = X_i # 'Append' to the preallocated array
         # Appending to an array is like measurement, and the noise is added in this step.
@@ -384,7 +384,7 @@ def run_asymmetry_mpemba_simulations(p_0s, num_particles, potential, num_allowed
     results = np.array(results, dtype=np.float32) # Change to single-precision floating point to save some memory 
     return xr.DataArray(results, coords = [('T', range(len(p_0s))), ('n', np.arange(0,num_particles,1)),('t', times)])
 
-def heating_cycle_mpemba_simulation(k_BTs, num_particles, potential, quench_protocol = None, dt=1e-5, expt_length=1e-1, heating_time = 3e-2, gamma=1/150, k_BT_b=1, measurement_noise_std=0, use_virtual_potential=False, clip_force=np.inf, initial_trap_constant=25, uniform_noise=False, binary_noise=False):
+def heating_cycle_mpemba_simulation(k_BTs, num_particles, potential, quench_protocol = None, dt=1e-5, expt_length=1e-1, heating_time = 3e-2, gamma=1/150, k_BT_b=1, measurement_noise_std=0, use_virtual_potential=False, clip_force=np.inf, initial_trap_constant=25, uniform_noise=False, binary_noise=False, drift_force = 0):
     """
     Simulate the experiment in Bechhoefer and Kumar (2020) by choosing an initial position from a Boltzmann distribution and integrating the Langevin equation that it corresponds to.
 
@@ -432,7 +432,7 @@ def heating_cycle_mpemba_simulation(k_BTs, num_particles, potential, quench_prot
         quench_protocol.set_a(k_BT/k_BT_b-1)
         
         x = np.random.normal(0, np.sqrt(2*k_BT_b/initial_trap_constant), num_particles) # The initial position is normally distributed, will heat to T_h, and cool to T_c.
-        results.append(simulation_function(x, force=lambda x, t: potential.F(x), temperature_function=lambda t: quench_protocol.h(t), expt_length=expt_length, gamma=gamma, k_BT_b=k_BT_b, dt=dt, measurement_noise_std=measurement_noise_std, clip_force=clip_force, t=times, uniform_noise=uniform_noise))
+        results.append(simulation_function(x, force=lambda x, t: potential.F(x), temperature_function=lambda t: quench_protocol.h(t), expt_length=expt_length, gamma=gamma, k_BT_b=k_BT_b, dt=dt, measurement_noise_std=measurement_noise_std, clip_force=clip_force, t=times, uniform_noise=uniform_noise, drift_force=drift_force, binary_noise=binary_noise))
     
     results = np.array(results, dtype=np.float32) # Change to single-precision floating point to save some memory
     return xr.DataArray(results, coords = [('T', k_BTs), ('n', np.arange(0,num_particles,1)),('t', times)])
