@@ -81,7 +81,7 @@ Quench techniques are also objects, and precompute a bunch of useful functions i
 5. Very little AI was used to write this code. I find that it just doesn't work too well (and also have general political objections to AI), and it's best to just *git gud*, as we say in the Silksong community. If you think it might help you by all means use it but be aware that you are in territory where it may well fail. I dunno, maybe I'm just a Luddite.
 6. I use Spyder to develop the .py code and VSCodium to run ipython sandbox stuff. You don't have to, of course, but maybe you find this info useful for some reason.
 7. I didn't bother to make this an actual package you can download from PIP but maybe if you know how to do that you can give it a shot. For now just use `sys.path.append` at the start of your code or make sure whatever you're running is in the same working directory.
-8. You're going to be going back and forth between your personal computer and the lab computer that runs the experiment. I found it way too annoying to keep physically transferring files with a pen drive, so I just use Git for file-syncing and version control. I highly recommend you learn Git if you don't know how to use it already. `Git gud` at Git, if you will.
+8. You're going to be going back and forth between your personal computer and the lab computer that runs the experiment. I found it way too annoying to keep physically transferring files with a pen drive, so I just use Git for file-syncing and version control. I highly recommend you learn Git if you don't know how to use it already. `git gud`, if you will.
 
 ### Some little assignments
 Here's some little assignments you could try to make the code your own and familiarise yourself with its structure
