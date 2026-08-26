@@ -1,7 +1,11 @@
-Python code contains methods to integrate the Langevin equation. 
+Python code contains methods to integrate the Langevin equation. This library will likely not be updated much anymore (unless you want to fork it).
 
 ## Installation
-To install this code, download the zip folder, unzip, etc. Or clone the repo using the standard way of cloning repos. Make sure all the files are in the same directory as whatever python file you use to import the code.  
+To install this code, download the zip folder, unzip, etc. Or clone the repo using the standard way of cloning repos. Make sure all the files are in the same directory as whatever python file you use to import the code, or use
+```python
+  import sys
+  sys.path.append("path/to/directory/with/python/files")
+```
 
 ## Requirements
 Use `import mpemba` to import all of the methods you need to run Langevin simulations and such. For solving the FPE, use ```import fokker_planck```. 
@@ -11,6 +15,7 @@ Special libraries: you will need the latest versions (at least as of Dec 2025) o
 2. SymPy (Some methods use analytic derivative computations so that we have more generalisable methods)
 3. Xarray (Pandas on steroids – this allows you to have pandas-like objects in more than two dimensions)
 4. tqdm (for clean progress bars. You don't really need this but I like to have it. If you don't want it, just delete all references to ```tqdm``` in the code)
+5. Polars (faster Rust-based data structures for lightning-fast loading of very large .txt files. This is more recent but I got annoyed about waiting 4+ minutes for pandas to load in a txt file; Polars cut it down to 30 seconds.)
 
 in addition to other basic libraries like NumPy, Pandas, and so on which you probably already have.
 
@@ -59,4 +64,44 @@ You may also want to define a `__str__` and `__repr__` for readability, but you 
 
 Once the potential is well-defined, you can either run simulations or process data using the code documented above. This should be compiled into an `xarray.DataArray` with appropriate dimension names, that you can then send the data as well as the potential to an `Ensemble` object. The `Ensemble` object contains a number of useful methods for histogramming, computing PDFs, computing distances to equilibrium, and so on. The ensemble will store histogram and distance data that it generates so that you won't have to wait ~10 seconds every time you call the distances. Additionally, the `Ensemble` object uses a custom-built histogram function that's designed to very quickly histogram data in the required format. 
 
-Other methods are documented in the code itself. If you ask me super nicely, I can explain it to you as well.
+Quench techniques are also objects, and precompute a bunch of useful functions if you're doing coordinate transformation stuff (which would be really awesome if you did; please email me if you do because that would be sick AF and I wanna know). `quench_methods.py` contains the base `QuenchProtocol` class and a number of sample quench functions. Here's an example of how to create a few.
+```python
+  import mpemba
+
+  instantaneous_quench = mpemba.quench_methods.InstantaneousQuench()
+  exponential_quench = mpemba.quench_methods.ExponentialQuench(tau=65) # I used tau instead of Lambda here. You can change this if you like -- think of it as a mini-assignment!
+```
+
+## For the new student
+### Some prerequisiste knowledge
+1. You need to know Python. In other news, water: wet. I mean, you probably already know some Python but I guess this is my version of a closure axiom.
+2. You're going to need to have a decent understanding of object-oriented programming in Python. I know this isn't often taught in physics undergrad courses but it's valuable knowledge (and makes you marginally more employable) so you might as well. I find that MIT OCW 6.0001 has a bunch of really nice lectures (and more importantly, assignments) that you can use to teach yourself this stuff fairly quickly.
+3. I had to run a lot of this code very repetitively so my focus when designing it was to minimise the number of lines I'd have to write while analysing data. That might have come at the cost of readability, unfortunately. Sorry!
+4. Some knowledge of how to use JIT libraries like Numba would be pretty useful too. If your kernel crashes, 90% of the time it's going to be Numba's fault.
+5. Very little AI was used to write this code. I find that it just doesn't work too well (and also have general political objections to AI), and it's best to just *git gud*, as we say in the Silksong community. If you think it might help you by all means use it but be aware that you are in territory where it may well fail. I dunno, maybe I'm just a Luddite.
+6. I use Spyder to develop the .py code and VSCodium to run ipython sandbox stuff. You don't have to, of course, but maybe you find this info useful for some reason.
+7. I didn't bother to make this an actual package you can download from PIP but maybe if you know how to do that you can give it a shot. For now just use `sys.path.append` at the start of your code or make sure whatever you're running is in the same working directory.
+8. You're going to be going back and forth between your personal computer and the lab computer that runs the experiment. I found it way too annoying to keep physically transferring files with a pen drive, so I just use Git for file-syncing and version control. I highly recommend you learn Git if you don't know how to use it already.
+
+### Some little assignments
+Here's some little assignments you could try to make the code your own and familiarise yourself with its structure
+1. Build a `Potential` object. You could try `AsymmetricDoubleWellPotential()` with default parameters as a jumping-off point.
+2. Use the Potential either to run a simulation or load in a dataset.
+3. Build an `Ensemble` object.
+4. Plot the distance curves. Is there a Mpemba effect?
+5. Try plotting the average energy (Look for the method that does this). Does it decay monotonically?
+6. Try running another simulation with a non-instantaneous quench. Plot the distance curves again
+7. How do these results stack up against the solution to the Fokker-Planck equation? Try plotting the distance curves and overlaying the distances you get from the analytic solution to the FPE.
+8. Try making your own special potential and quench methods! Use the code in `special_potentials.py` as a template.
+
+### TODO
+Once you know what you're doing with the code, here's a few patch jobs you could try 
+1. Make this whole mini-library a proper PIP package with actual version control.
+2. I never could get Numba to play nicely with the central Langevin simulations because Numba absolutely hates custom objects and the code to make my potential objects Numba-friendly would've been super janky to implement. Still, it might be nice to have it; it'd cut down on simulation time by quite a bit (although it only takes like 30 seconds for a 10k particle sim so it's not *terrible*).
+3. Implement techniques for more robust FPE solving. Right now I find that setting an error tolerance is always a bit of a tightrope act between ensuring the integrator doesn't fail and ensuring that it finishes running quickly enough. Maybe you can also think of something that'd make this guesswork automatic.
+4. Implement techniques for 2D potentials. This shouldn't be *super* hard; in principle you may only need to change a few lines of code in `simulation_methods` and `potential_methods`. Still, it might create a bunch of downstream issues.
+5. Make the file-processing techniques faster. I added a couple of techniques that use the Polars library for faster file loading but I find in practice that it doesn't *consistently* cut down on loading time; it only runs really fast if there's enough free RAM. (This is why restarting the IPython kernel can really speed up the bits of code where it loads in the dataset). The writeout libraries are particularly slow, and can sometimes take almost a minute to convert a 16 GB raw datafile into three ~400 MB csv files. Maybe also try to use faster file formats like Parquet or Pickle.
+6. Run some more comprehensive tests on the virtual potential Langevin stuff. I did a few tests myself but I don't know if I fully trust it yet. If you define a potential with really high curvature in some areas you should see the `langevin_simulation_virtualPotential` and `langevin_simulation` results start to diverge.
+7. Add your own functionality to the code I wrote!
+
+Good luck!
