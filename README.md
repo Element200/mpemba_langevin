@@ -15,7 +15,7 @@ Special libraries: you will need the latest versions (at least as of Dec 2025) o
 2. SymPy (Some methods use analytic derivative computations so that we have more generalisable methods)
 3. Xarray (Pandas on steroids – this allows you to have pandas-like objects in more than two dimensions)
 4. tqdm (for clean progress bars. You don't really need this but I like to have it. If you don't want it, just delete all references to ```tqdm``` in the code)
-5. Polars (faster Rust-based data structures for lightning-fast loading of very large .txt files. This is more recent but I got annoyed about waiting 4+ minutes for pandas to load in a txt file; Polars cut it down to 30 seconds.)
+5. Polars (faster Rust-based data structures for lightning-fast loading of very large .txt files. This is more recent but I got annoyed about waiting 4+ minutes for pandas to load in a txt file; Polars cut it down to 30 seconds. You might have to restart your kernel for it to work though.)
 
 in addition to other basic libraries like NumPy, Pandas, and so on which you probably already have.
 
@@ -72,7 +72,9 @@ Quench techniques are also objects, and precompute a bunch of useful functions i
   exponential_quench = mpemba.quench_methods.ExponentialQuench(tau=65) # I used tau instead of Lambda here. You can change this if you like -- think of it as a mini-assignment!
 ```
 
-## For the new student
+## For Maor
+Hi! I'm so glad to see that someone is carrying the torch forward. 
+
 ### Some prerequisiste knowledge
 1. You need to know Python. In other news, water: wet. I mean, you probably already know some Python but I guess this is my version of a closure axiom.
 2. You're going to need to have a decent understanding of object-oriented programming in Python. I know this isn't often taught in physics undergrad courses but it's valuable knowledge (and makes you marginally more employable) so you might as well. I find that MIT OCW 6.0001 has a bunch of really nice lectures (and more importantly, assignments) that you can use to teach yourself this stuff fairly quickly.
@@ -82,6 +84,7 @@ Quench techniques are also objects, and precompute a bunch of useful functions i
 6. I use Spyder to develop the .py code and VSCodium to run ipython sandbox stuff. You don't have to, of course, but maybe you find this info useful for some reason.
 7. I didn't bother to make this an actual package you can download from PIP but maybe if you know how to do that you can give it a shot. For now just use `sys.path.append` at the start of your code or make sure whatever you're running is in the same working directory.
 8. You're going to be going back and forth between your personal computer and the lab computer that runs the experiment. I found it way too annoying to keep physically transferring files with a pen drive, so I just use Git for file-syncing and version control. I highly recommend you learn Git if you don't know how to use it already. `git gud`, if you will.
+9. I've tried to eliminate bugs as I see them, but especially with older code I don't use that much anymore, I can't guarantee it's all bug free. Try fixing them on your own, but I'm more than happy to help! Just keep in mind that as time progresses I'm going to remember progressively less about all this.
 
 ### Some little assignments
 Here's some little assignments you could try to make the code your own and familiarise yourself with its structure
